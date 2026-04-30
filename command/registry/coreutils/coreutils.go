@@ -19,6 +19,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/fold"
 	"tangled.org/xeiaso.net/kefka/command/internal/gunzip"
 	"tangled.org/xeiaso.net/kefka/command/internal/gzip"
+	"tangled.org/xeiaso.net/kefka/command/internal/head"
 	"tangled.org/xeiaso.net/kefka/command/internal/hostname"
 	"tangled.org/xeiaso.net/kefka/command/internal/join"
 	"tangled.org/xeiaso.net/kefka/command/internal/ls"
@@ -26,11 +27,31 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/mkdir"
 	"tangled.org/xeiaso.net/kefka/command/internal/mv"
 	"tangled.org/xeiaso.net/kefka/command/internal/nl"
+	"tangled.org/xeiaso.net/kefka/command/internal/od"
 	"tangled.org/xeiaso.net/kefka/command/internal/paste"
+	"tangled.org/xeiaso.net/kefka/command/internal/printf"
+	"tangled.org/xeiaso.net/kefka/command/internal/pwd"
+	"tangled.org/xeiaso.net/kefka/command/internal/readlink"
+	"tangled.org/xeiaso.net/kefka/command/internal/rm"
+	"tangled.org/xeiaso.net/kefka/command/internal/rmdir"
+	"tangled.org/xeiaso.net/kefka/command/internal/seq"
 	"tangled.org/xeiaso.net/kefka/command/internal/sha1sum"
 	"tangled.org/xeiaso.net/kefka/command/internal/sha256sum"
+	"tangled.org/xeiaso.net/kefka/command/internal/sleep"
+	"tangled.org/xeiaso.net/kefka/command/internal/split"
+	"tangled.org/xeiaso.net/kefka/command/internal/stat"
+	"tangled.org/xeiaso.net/kefka/command/internal/tac"
+	"tangled.org/xeiaso.net/kefka/command/internal/tail"
+	"tangled.org/xeiaso.net/kefka/command/internal/tee"
+	"tangled.org/xeiaso.net/kefka/command/internal/time"
+	"tangled.org/xeiaso.net/kefka/command/internal/touch"
+	"tangled.org/xeiaso.net/kefka/command/internal/tr"
+	"tangled.org/xeiaso.net/kefka/command/internal/tree"
 	"tangled.org/xeiaso.net/kefka/command/internal/truecmd"
 	"tangled.org/xeiaso.net/kefka/command/internal/unexpand"
+	"tangled.org/xeiaso.net/kefka/command/internal/uniq"
+	"tangled.org/xeiaso.net/kefka/command/internal/wc"
+	"tangled.org/xeiaso.net/kefka/command/internal/whoami"
 	"tangled.org/xeiaso.net/kefka/command/internal/zcat"
 	"tangled.org/xeiaso.net/kefka/command/registry"
 )
@@ -54,6 +75,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("fold", fold.Impl{})
 	reg.Register("gunzip", gunzip.Impl{})
 	reg.Register("gzip", gzip.Impl{})
+	reg.Register("head", head.Impl{})
 	reg.Register("hostname", hostname.Impl{})
 	reg.Register("join", join.Impl{})
 	reg.Register("ls", ls.Impl{})
@@ -61,10 +83,30 @@ func Register(reg *registry.Impl) {
 	reg.Register("mkdir", mkdir.Impl{})
 	reg.Register("mv", mv.Impl{})
 	reg.Register("nl", nl.Impl{})
+	reg.Register("od", od.Impl{})
 	reg.Register("paste", paste.Impl{})
+	reg.Register("printf", printf.Impl{})
+	reg.Register("pwd", pwd.Impl{})
+	reg.Register("readlink", readlink.Impl{})
+	reg.Register("rm", rm.Impl{})
+	reg.Register("rmdir", rmdir.Impl{})
+	reg.Register("seq", seq.Impl{})
 	reg.Register("sha1sum", sha1sum.Impl{})
 	reg.Register("sha256sum", sha256sum.Impl{})
+	reg.Register("sleep", sleep.Impl{})
+	reg.Register("split", split.Impl{})
+	reg.Register("stat", stat.Impl{})
+	reg.Register("tac", tac.Impl{})
+	reg.Register("tail", tail.Impl{})
+	reg.Register("tee", tee.Impl{})
+	reg.Register("time", time.Impl{Registry: reg})
+	reg.Register("touch", touch.Impl{})
+	reg.Register("tr", tr.Impl{})
+	reg.Register("tree", tree.Impl{})
 	reg.Register("true", truecmd.Impl{})
 	reg.Register("unexpand", unexpand.Impl{})
+	reg.Register("uniq", uniq.Impl{})
+	reg.Register("wc", wc.Impl{})
+	reg.Register("whoami", whoami.Impl{})
 	reg.Register("zcat", zcat.Impl{})
 }
