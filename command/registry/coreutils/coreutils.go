@@ -12,10 +12,12 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/diff"
 	"tangled.org/xeiaso.net/kefka/command/internal/dirname"
 	"tangled.org/xeiaso.net/kefka/command/internal/du"
+	"tangled.org/xeiaso.net/kefka/command/internal/expand"
 	"tangled.org/xeiaso.net/kefka/command/internal/falsecmd"
 	"tangled.org/xeiaso.net/kefka/command/internal/hostname"
 	"tangled.org/xeiaso.net/kefka/command/internal/ls"
 	"tangled.org/xeiaso.net/kefka/command/internal/truecmd"
+	"tangled.org/xeiaso.net/kefka/command/internal/unexpand"
 	"tangled.org/xeiaso.net/kefka/command/registry"
 )
 
@@ -31,8 +33,10 @@ func Register(reg *registry.Impl) {
 	reg.Register("diff", diff.Impl{})
 	reg.Register("dirname", dirname.Impl{})
 	reg.Register("du", du.Impl{})
+	reg.Register("expand", expand.Impl{})
 	reg.Register("false", falsecmd.Impl{})
 	reg.Register("hostname", hostname.Impl{})
 	reg.Register("ls", ls.Impl{})
 	reg.Register("true", truecmd.Impl{})
+	reg.Register("unexpand", unexpand.Impl{})
 }
