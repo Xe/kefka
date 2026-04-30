@@ -8,6 +8,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/column"
 	"tangled.org/xeiaso.net/kefka/command/internal/cp"
 	"tangled.org/xeiaso.net/kefka/command/internal/cut"
+	"tangled.org/xeiaso.net/kefka/command/internal/date"
 	"tangled.org/xeiaso.net/kefka/command/internal/falsecmd"
 	"tangled.org/xeiaso.net/kefka/command/internal/hostname"
 	"tangled.org/xeiaso.net/kefka/command/internal/ls"
@@ -23,6 +24,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("column", column.Impl{})
 	reg.Register("cp", cp.Impl{})
 	reg.Register("cut", cut.Impl{})
+	reg.Register("date", date.Impl{})
 	reg.Register("false", falsecmd.Impl{})
 	reg.Register("hostname", hostname.Impl{})
 	reg.Register("ls", ls.Impl{})
