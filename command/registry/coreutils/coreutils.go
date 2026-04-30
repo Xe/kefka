@@ -16,6 +16,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/expr"
 	"tangled.org/xeiaso.net/kefka/command/internal/file"
 	"tangled.org/xeiaso.net/kefka/command/internal/falsecmd"
+	"tangled.org/xeiaso.net/kefka/command/internal/fold"
 	"tangled.org/xeiaso.net/kefka/command/internal/hostname"
 	"tangled.org/xeiaso.net/kefka/command/internal/ls"
 	"tangled.org/xeiaso.net/kefka/command/internal/truecmd"
@@ -39,6 +40,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("expr", expr.Impl{})
 	reg.Register("file", file.Impl{})
 	reg.Register("false", falsecmd.Impl{})
+	reg.Register("fold", fold.Impl{})
 	reg.Register("hostname", hostname.Impl{})
 	reg.Register("ls", ls.Impl{})
 	reg.Register("true", truecmd.Impl{})
