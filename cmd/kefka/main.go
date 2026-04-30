@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -13,6 +14,9 @@ import (
 	"golang.org/x/term"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
+	"tangled.org/xeiaso.net/kefka/command/registry"
+	"tangled.org/xeiaso.net/kefka/command/registry/coreutils"
+	"tangled.org/xeiaso.net/kefka/command/registry/wasmprog"
 )
 
 var (
@@ -34,7 +38,27 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	sh, err := interp.New(interp.Interactive(true), interp.StdIO(os.Stdin, os.Stdout, os.Stderr))
+	reg := registry.New()
+	coreutils.Register(reg)
+	wasmprog.Register(reg)
+
+	fsys := os.DirFS(".")
+
+	middleware := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			return reg.Exec(ctx, fsys, args)
+		}
+	}
+
+	sh, err := interp.New(
+		interp.Interactive(true),
+		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
+		interp.ExecHandlers(middleware),
+		interp.CallHandler(callHandler(reg, fsys, os.Stdout, os.Stderr)),
+		interp.StatHandler(fsysStatHandler(reg, fsys)),
+		interp.OpenHandler(fsysOpenHandler(reg, fsys)),
+		interp.ReadDirHandler2(fsysReadDirHandler(reg, fsys)),
+	)
 	if err != nil {
 		return fmt.Errorf("can't make shell: %w", err)
 	}
@@ -71,6 +95,74 @@ func runFile(ctx context.Context, sh *interp.Runner, fname string) error {
 	defer fin.Close()
 	return runReader(ctx, sh, fin, fname)
 }
+
+// callHandler intercepts cd and pwd before interp's builtins handle them,
+// so we can route directory state through the registry's fsys-relative pwd
+// instead of interp's host-rooted Dir. Intercepted calls are replaced with
+// `:` (no-op) so interp's builtin doesn't run.
+func callHandler(reg *registry.Impl, fsys fs.FS, stdout, stderr io.Writer) interp.CallHandlerFunc {
+	return func(ctx context.Context, args []string) ([]string, error) {
+		if len(args) == 0 {
+			return args, nil
+		}
+		switch args[0] {
+		case "cd":
+			target := ""
+			if len(args) > 1 {
+				target = args[1]
+			}
+			if err := reg.Chdir(fsys, target); err != nil {
+				fmt.Fprintln(stderr, err)
+				return []string{"false"}, nil
+			}
+			return []string{":"}, nil
+		case "pwd":
+			pwd := reg.Pwd()
+			if pwd == "." {
+				fmt.Fprintln(stdout, "/")
+			} else {
+				fmt.Fprintln(stdout, "/"+pwd)
+			}
+			return []string{":"}, nil
+		}
+		return args, nil
+	}
+}
+
+func fsysStatHandler(reg *registry.Impl, fsys fs.FS) interp.StatHandlerFunc {
+	return func(ctx context.Context, name string, followSymlinks bool) (fs.FileInfo, error) {
+		resolved := reg.Resolve(name)
+		if !followSymlinks {
+			if r, ok := fsys.(fs.ReadLinkFS); ok {
+				return r.Lstat(resolved)
+			}
+		}
+		return fs.Stat(fsys, resolved)
+	}
+}
+
+func fsysOpenHandler(reg *registry.Impl, fsys fs.FS) interp.OpenHandlerFunc {
+	return func(ctx context.Context, name string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
+		if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_APPEND|os.O_TRUNC) != 0 {
+			return nil, &os.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+		}
+		f, err := fsys.Open(reg.Resolve(name))
+		if err != nil {
+			return nil, err
+		}
+		return readOnlyFile{f}, nil
+	}
+}
+
+func fsysReadDirHandler(reg *registry.Impl, fsys fs.FS) interp.ReadDirHandlerFunc2 {
+	return func(ctx context.Context, name string) ([]fs.DirEntry, error) {
+		return fs.ReadDir(fsys, reg.Resolve(name))
+	}
+}
+
+type readOnlyFile struct{ fs.File }
+
+func (readOnlyFile) Write([]byte) (int, error) { return 0, fs.ErrPermission }
 
 func runInteractive(ctx context.Context, sh *interp.Runner, stdin io.Reader, stdout, stderr io.Writer) error {
 	parser := syntax.NewParser()
