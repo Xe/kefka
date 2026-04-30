@@ -25,6 +25,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/mkdir"
 	"tangled.org/xeiaso.net/kefka/command/internal/mv"
 	"tangled.org/xeiaso.net/kefka/command/internal/nl"
+	"tangled.org/xeiaso.net/kefka/command/internal/paste"
 	"tangled.org/xeiaso.net/kefka/command/internal/truecmd"
 	"tangled.org/xeiaso.net/kefka/command/internal/unexpand"
 	"tangled.org/xeiaso.net/kefka/command/internal/zcat"
@@ -56,6 +57,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("mkdir", mkdir.Impl{})
 	reg.Register("mv", mv.Impl{})
 	reg.Register("nl", nl.Impl{})
+	reg.Register("paste", paste.Impl{})
 	reg.Register("true", truecmd.Impl{})
 	reg.Register("unexpand", unexpand.Impl{})
 	reg.Register("zcat", zcat.Impl{})
