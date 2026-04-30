@@ -125,6 +125,10 @@ func (f *billyFile) Write(buf []byte) (int, expsys.Errno) {
 	return n, 0
 }
 
+// Seek satisfies expsys.File.Seek; the Errno return is required by wazero
+// even though it implements error, which trips go vet's stdmethods check.
+//
+//nolint:stdmethods
 func (f *billyFile) Seek(offset int64, whence int) (int64, expsys.Errno) {
 	n, err := f.file.Seek(offset, whence)
 	if err != nil {
