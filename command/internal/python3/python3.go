@@ -3,28 +3,32 @@ package python3
 import (
 	"context"
 	_ "embed"
+	"errors"
 
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/experimental/sysfs"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	wsys "github.com/tetratelabs/wazero/sys"
+	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
+	"tangled.org/xeiaso.net/kefka/wasm/billyfs"
 )
 
-var (
-	//go:embed python.wasm
-	pyWASM []byte
+//go:embed python.wasm
+var pyWASM []byte
 
-	r    wazero.Runtime
-	code wazero.CompiledModule
+var (
+	runtime  wazero.Runtime
+	compiled wazero.CompiledModule
 )
 
 func init() {
 	ctx := context.Background()
-	r = wazero.NewRuntime(ctx)
-
-	wasi_snapshot_preview1.MustInstantiate(ctx, r)
+	runtime = wazero.NewRuntime(ctx)
+	wasi_snapshot_preview1.MustInstantiate(ctx, runtime)
 
 	var err error
-	code, err = r.CompileModule(ctx, pyWASM)
+	compiled, err = runtime.CompileModule(ctx, pyWASM)
 	if err != nil {
 		panic(err)
 	}
@@ -33,30 +37,29 @@ func init() {
 type Impl struct{}
 
 func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) error {
-	fsConfig := wazero.NewFSConfig().
-		WithFSMount(ec.FS, "/")
+	fsConfig := wazero.NewFSConfig().(sysfs.FSConfig).
+		WithSysFSMount(billyfs.New(ec.FS), "/")
 
 	config := wazero.NewModuleConfig().
-		// stdio
 		WithStdin(ec.Stdin).
 		WithStdout(ec.Stdout).
 		WithStderr(ec.Stderr).
-		// argv
 		WithArgs(append([]string{"python3"}, args...)...).
 		WithName("python3").
-		// filesystem
 		WithFSConfig(fsConfig).
-		// time
 		WithSysNanosleep().
 		WithSysNanotime().
 		WithSysWalltime()
 
-	mod, err := r.InstantiateModule(ctx, code, config)
+	mod, err := runtime.InstantiateModule(ctx, compiled, config)
 	if err != nil {
+		if exitErr, ok := errors.AsType[*wsys.ExitError](err); ok {
+			if code := exitErr.ExitCode(); code != 0 {
+				return interp.ExitStatus(uint8(code))
+			}
+			return nil
+		}
 		return err
 	}
-
-	defer mod.Close(ctx)
-
-	return nil
+	return mod.Close(ctx)
 }

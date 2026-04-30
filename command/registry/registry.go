@@ -3,11 +3,11 @@ package registry
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"path"
 	"strings"
 	"sync"
 
+	"github.com/go-git/go-billy/v5"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
 )
@@ -66,13 +66,13 @@ func (i *Impl) Resolve(p string) string {
 }
 
 // Chdir changes the fsys-relative working directory. Validates against fsys.
-func (i *Impl) Chdir(fsys fs.FS, target string) error {
+func (i *Impl) Chdir(fsys billy.Filesystem, target string) error {
 	if target == "" {
 		target = "."
 	}
 	next := i.Resolve(target)
 
-	info, err := fs.Stat(fsys, next)
+	info, err := fsys.Stat(next)
 	if err != nil {
 		return fmt.Errorf("cd: %s: No such file or directory", target)
 	}
@@ -86,7 +86,7 @@ func (i *Impl) Chdir(fsys fs.FS, target string) error {
 	return nil
 }
 
-func (i *Impl) Exec(ctx context.Context, fsys fs.FS, args []string) error {
+func (i *Impl) Exec(ctx context.Context, fsys billy.Filesystem, args []string) error {
 	hc := interp.HandlerCtx(ctx)
 
 	if len(args) == 0 {

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 	"mvdan.cc/sh/v3/interp"
@@ -42,7 +44,7 @@ func run(ctx context.Context) error {
 	coreutils.Register(reg)
 	wasmprog.Register(reg)
 
-	fsys := os.DirFS(".")
+	fsys := osfs.New(".")
 
 	middleware := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
@@ -100,7 +102,7 @@ func runFile(ctx context.Context, sh *interp.Runner, fname string) error {
 // so we can route directory state through the registry's fsys-relative pwd
 // instead of interp's host-rooted Dir. Intercepted calls are replaced with
 // `:` (no-op) so interp's builtin doesn't run.
-func callHandler(reg *registry.Impl, fsys fs.FS, stdout, stderr io.Writer) interp.CallHandlerFunc {
+func callHandler(reg *registry.Impl, fsys billy.Filesystem, stdout, stderr io.Writer) interp.CallHandlerFunc {
 	return func(ctx context.Context, args []string) ([]string, error) {
 		if len(args) == 0 {
 			return args, nil
@@ -129,19 +131,19 @@ func callHandler(reg *registry.Impl, fsys fs.FS, stdout, stderr io.Writer) inter
 	}
 }
 
-func fsysStatHandler(reg *registry.Impl, fsys fs.FS) interp.StatHandlerFunc {
+func fsysStatHandler(reg *registry.Impl, fsys billy.Filesystem) interp.StatHandlerFunc {
 	return func(ctx context.Context, name string, followSymlinks bool) (fs.FileInfo, error) {
 		resolved := reg.Resolve(name)
 		if !followSymlinks {
-			if r, ok := fsys.(fs.ReadLinkFS); ok {
+			if r, ok := fsys.(billy.Symlink); ok {
 				return r.Lstat(resolved)
 			}
 		}
-		return fs.Stat(fsys, resolved)
+		return fsys.Stat(resolved)
 	}
 }
 
-func fsysOpenHandler(reg *registry.Impl, fsys fs.FS) interp.OpenHandlerFunc {
+func fsysOpenHandler(reg *registry.Impl, fsys billy.Filesystem) interp.OpenHandlerFunc {
 	return func(ctx context.Context, name string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
 		if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_APPEND|os.O_TRUNC) != 0 {
 			return nil, &os.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
@@ -154,13 +156,21 @@ func fsysOpenHandler(reg *registry.Impl, fsys fs.FS) interp.OpenHandlerFunc {
 	}
 }
 
-func fsysReadDirHandler(reg *registry.Impl, fsys fs.FS) interp.ReadDirHandlerFunc2 {
+func fsysReadDirHandler(reg *registry.Impl, fsys billy.Filesystem) interp.ReadDirHandlerFunc2 {
 	return func(ctx context.Context, name string) ([]fs.DirEntry, error) {
-		return fs.ReadDir(fsys, reg.Resolve(name))
+		entries, err := fsys.ReadDir(reg.Resolve(name))
+		if err != nil {
+			return nil, err
+		}
+		out := make([]fs.DirEntry, len(entries))
+		for i, e := range entries {
+			out[i] = fs.FileInfoToDirEntry(e)
+		}
+		return out, nil
 	}
 }
 
-type readOnlyFile struct{ fs.File }
+type readOnlyFile struct{ billy.File }
 
 func (readOnlyFile) Write([]byte) (int, error) { return 0, fs.ErrPermission }
 

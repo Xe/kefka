@@ -3,33 +3,41 @@ package ls
 import (
 	"bytes"
 	"context"
-	"io/fs"
+	"os"
 	"testing"
-	"testing/fstest"
 	"time"
 
+	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v5/memfs"
 	"tangled.org/xeiaso.net/kefka/command"
 )
 
-// fixedTime is far enough in the past that formatDate always emits the
-// year-form ("Jan 15  2020"), keeping expected output stable as the
-// test clock advances.
-var fixedTime = time.Date(2020, 1, 15, 12, 0, 0, 0, time.UTC)
-
-func newTestFS() fstest.MapFS {
-	return fstest.MapFS{
-		".":                   {Mode: fs.ModeDir | 0o755, ModTime: fixedTime},
-		"alpha.txt":           {Data: []byte("aaaa"), ModTime: fixedTime},             // 4 bytes
-		"beta.txt":            {Data: []byte("bbbbbbbb"), ModTime: fixedTime},         // 8 bytes
-		"gamma.txt":           {Data: []byte("cc"), ModTime: fixedTime},               // 2 bytes
-		".hidden":             {Data: []byte("h"), ModTime: fixedTime},                // 1 byte hidden
-		"script.sh":           {Data: []byte("#!"), Mode: 0o755, ModTime: fixedTime},  // executable
-		"huge.bin":            {Data: bytes.Repeat([]byte("x"), 1500), ModTime: fixedTime},
-		"sub":                 {Mode: fs.ModeDir | 0o755, ModTime: fixedTime},
-		"sub/inner.txt":       {Data: []byte("inner"), ModTime: fixedTime},
-		"sub/deeper":          {Mode: fs.ModeDir | 0o755, ModTime: fixedTime},
-		"sub/deeper/leaf.txt": {Data: []byte("L"), ModTime: fixedTime},
+func newTestFS() billy.Filesystem {
+	fs := memfs.New()
+	write := func(name string, data []byte, perm os.FileMode) {
+		f, err := fs.OpenFile(name, os.O_CREATE|os.O_WRONLY, perm)
+		if err != nil {
+			panic(err)
+		}
+		f.Write(data)
+		f.Close()
 	}
+	write("alpha.txt", []byte("aaaa"), 0o644)
+	write("beta.txt", []byte("bbbbbbbb"), 0o644)
+	write("gamma.txt", []byte("cc"), 0o644)
+	write(".hidden", []byte("h"), 0o644)
+	write("script.sh", []byte("#!"), 0o755)
+	write("huge.bin", bytes.Repeat([]byte("x"), 1500), 0o644)
+	write("sub/inner.txt", []byte("inner"), 0o644)
+	write("sub/deeper/leaf.txt", []byte("L"), 0o644)
+	return fs
+}
+
+func withFixedDate(t *testing.T) {
+	t.Helper()
+	prev := formatDate
+	formatDate = func(time.Time) string { return "Jan 15  2020" }
+	t.Cleanup(func() { formatDate = prev })
 }
 
 func TestExec(t *testing.T) {
@@ -165,8 +173,8 @@ func TestExec(t *testing.T) {
 			wantStdout: "alpha.txt\n",
 		},
 		{
-			name: "single file argument long",
-			args: []string{"-l", "alpha.txt"},
+			name:       "single file argument long",
+			args:       []string{"-l", "alpha.txt"},
 			wantStdout: "-rw-r--r-- 1 user user     4 Jan 15  2020 alpha.txt\n",
 		},
 		{
@@ -184,6 +192,7 @@ func TestExec(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			withFixedDate(t)
 			var stdout, stderr bytes.Buffer
 			dir := tc.dir
 			if dir == "" {
@@ -259,13 +268,13 @@ func TestFormatDate(t *testing.T) {
 
 	// Far in the past renders as month/day/year.
 	old := time.Date(2020, 7, 4, 9, 30, 0, 0, time.UTC)
-	if got, want := formatDate(old), "Jul  4  2020"; got != want {
+	if got, want := realFormatDate(old), "Jul  4  2020"; got != want {
 		t.Errorf("formatDate(%v) = %q, want %q", old, got, want)
 	}
 
 	// Within the last 6 months renders as month/day/HH:MM.
 	recent := now.Add(-3 * 24 * time.Hour)
-	got := formatDate(recent)
+	got := realFormatDate(recent)
 	month := recent.Month().String()[:3]
 	wantPrefix := month + " "
 	if !bytes.HasPrefix([]byte(got), []byte(wantPrefix)) {

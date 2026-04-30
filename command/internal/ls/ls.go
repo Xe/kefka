@@ -7,12 +7,15 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"os"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v5/util"
 	"github.com/spf13/pflag"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
@@ -155,7 +158,7 @@ func formatHumanSize(bytes int64) string {
 	return fmt.Sprintf("%dG", int64(math.Round(g)))
 }
 
-func formatDate(t time.Time) string {
+func realFormatDate(t time.Time) string {
 	month := t.Month().String()[:3]
 	day := fmt.Sprintf("%2d", t.Day())
 	sixMonthsAgo := time.Now().Add(-180 * 24 * time.Hour)
@@ -164,6 +167,8 @@ func formatDate(t time.Time) string {
 	}
 	return fmt.Sprintf("%s %s  %d", month, day, t.Year())
 }
+
+var formatDate = realFormatDate
 
 func classifySuffix(info fs.FileInfo) string {
 	if info.IsDir() {
@@ -178,11 +183,11 @@ func classifySuffix(info fs.FileInfo) string {
 	return ""
 }
 
-func lstatFS(fsys fs.FS, name string) (fs.FileInfo, error) {
-	if r, ok := fsys.(fs.ReadLinkFS); ok {
+func lstatFS(fsys billy.Filesystem, name string) (fs.FileInfo, error) {
+	if r, ok := fsys.(billy.Symlink); ok {
 		return r.Lstat(name)
 	}
-	return fs.Stat(fsys, name)
+	return fsys.Stat(name)
 }
 
 func padLeft(s string, n int) string {
@@ -215,7 +220,7 @@ func reverseStrings(s []string) {
 
 func listDirectoryEntry(ec *command.ExecContext, p string, longFormat, humanReadable, classifyFiles bool) (string, string, int) {
 	full := resolvePath(ec, p)
-	info, err := fs.Stat(ec.FS, full)
+	info, err := ec.FS.Stat(full)
 	if err != nil {
 		return "", fmt.Sprintf("ls: cannot access '%s': No such file or directory\n", p), 2
 	}
@@ -259,7 +264,7 @@ func listGlob(ec *command.ExecContext, pattern string, showAll, showAlmostAll, l
 		fsPattern = path.Join(dir, pattern)
 	}
 
-	matched, err := fs.Glob(ec.FS, fsPattern)
+	matched, err := util.Glob(ec.FS, fsPattern)
 	if err != nil || len(matched) == 0 {
 		return "", fmt.Sprintf("ls: %s: No such file or directory\n", pattern), 2
 	}
@@ -284,7 +289,7 @@ func listGlob(ec *command.ExecContext, pattern string, showAll, showAlmostAll, l
 	if sortBySize {
 		sizes := make(map[string]int64, len(displayPaths))
 		for _, m := range displayPaths {
-			if info, e := fs.Stat(ec.FS, resolvePath(ec, m)); e == nil {
+			if info, e := ec.FS.Stat(resolvePath(ec, m)); e == nil {
 				sizes[m] = info.Size()
 			}
 		}
@@ -304,7 +309,7 @@ func listGlob(ec *command.ExecContext, pattern string, showAll, showAlmostAll, l
 	if longFormat {
 		for _, m := range displayPaths {
 			full := resolvePath(ec, m)
-			info, statErr := fs.Stat(ec.FS, full)
+			info, statErr := ec.FS.Stat(full)
 			if statErr != nil {
 				fmt.Fprintf(&errOut, "ls: cannot access '%s': %v\n", m, statErr)
 				exitCode = 2
@@ -344,7 +349,7 @@ func listPath(ctx context.Context, ec *command.ExecContext, p string, showAll, s
 	showHidden := showAll || showAlmostAll
 	full := resolvePath(ec, p)
 
-	info, err := fs.Stat(ec.FS, full)
+	info, err := ec.FS.Stat(full)
 	if err != nil {
 		return "", fmt.Sprintf("ls: %s: No such file or directory\n", p), 2
 	}
@@ -362,13 +367,13 @@ func listPath(ctx context.Context, ec *command.ExecContext, p string, showAll, s
 		return p + suffix + "\n", "", 0
 	}
 
-	dirEntries, err := fs.ReadDir(ec.FS, full)
+	dirEntries, err := ec.FS.ReadDir(full)
 	if err != nil {
 		return "", fmt.Sprintf("ls: %s: %v\n", p, err), 2
 	}
 
 	names := make([]string, 0, len(dirEntries))
-	entryByName := make(map[string]fs.DirEntry, len(dirEntries))
+	entryByName := make(map[string]os.FileInfo, len(dirEntries))
 	for _, e := range dirEntries {
 		name := e.Name()
 		if !showHidden && strings.HasPrefix(name, ".") {
@@ -381,7 +386,7 @@ func listPath(ctx context.Context, ec *command.ExecContext, p string, showAll, s
 	if sortBySize {
 		sizes := make(map[string]int64, len(names))
 		for _, name := range names {
-			if einfo, e := fs.Stat(ec.FS, path.Join(full, name)); e == nil {
+			if einfo, e := ec.FS.Stat(path.Join(full, name)); e == nil {
 				sizes[name] = einfo.Size()
 			}
 		}
@@ -424,7 +429,7 @@ func listPath(ctx context.Context, ec *command.ExecContext, p string, showAll, s
 			default:
 				entryPath = path.Join(full, name)
 			}
-			einfo, errE := fs.Stat(ec.FS, entryPath)
+			einfo, errE := ec.FS.Stat(entryPath)
 			if errE != nil {
 				fmt.Fprintf(&errOut, "ls: cannot access '%s': %v\n", name, errE)
 				exitCode = 2
@@ -479,8 +484,8 @@ func listPath(ctx context.Context, ec *command.ExecContext, p string, showAll, s
 			if ok {
 				if entry.IsDir() {
 					isDir = true
-				} else if entry.Type()&fs.ModeSymlink != 0 {
-					if einfo, e := fs.Stat(ec.FS, path.Join(full, name)); e == nil && einfo.IsDir() {
+				} else if entry.Mode()&fs.ModeSymlink != 0 {
+					if einfo, e := ec.FS.Stat(path.Join(full, name)); e == nil && einfo.IsDir() {
 						isDir = true
 					}
 				}
