@@ -13,6 +13,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/dirname"
 	"tangled.org/xeiaso.net/kefka/command/internal/du"
 	"tangled.org/xeiaso.net/kefka/command/internal/expand"
+	"tangled.org/xeiaso.net/kefka/command/internal/expr"
 	"tangled.org/xeiaso.net/kefka/command/internal/falsecmd"
 	"tangled.org/xeiaso.net/kefka/command/internal/hostname"
 	"tangled.org/xeiaso.net/kefka/command/internal/ls"
@@ -34,6 +35,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("dirname", dirname.Impl{})
 	reg.Register("du", du.Impl{})
 	reg.Register("expand", expand.Impl{})
+	reg.Register("expr", expr.Impl{})
 	reg.Register("false", falsecmd.Impl{})
 	reg.Register("hostname", hostname.Impl{})
 	reg.Register("ls", ls.Impl{})
