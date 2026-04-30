@@ -17,10 +17,14 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/file"
 	"tangled.org/xeiaso.net/kefka/command/internal/falsecmd"
 	"tangled.org/xeiaso.net/kefka/command/internal/fold"
+	"tangled.org/xeiaso.net/kefka/command/internal/gunzip"
+	"tangled.org/xeiaso.net/kefka/command/internal/gzip"
 	"tangled.org/xeiaso.net/kefka/command/internal/hostname"
+	"tangled.org/xeiaso.net/kefka/command/internal/join"
 	"tangled.org/xeiaso.net/kefka/command/internal/ls"
 	"tangled.org/xeiaso.net/kefka/command/internal/truecmd"
 	"tangled.org/xeiaso.net/kefka/command/internal/unexpand"
+	"tangled.org/xeiaso.net/kefka/command/internal/zcat"
 	"tangled.org/xeiaso.net/kefka/command/registry"
 )
 
@@ -41,8 +45,12 @@ func Register(reg *registry.Impl) {
 	reg.Register("file", file.Impl{})
 	reg.Register("false", falsecmd.Impl{})
 	reg.Register("fold", fold.Impl{})
+	reg.Register("gunzip", gunzip.Impl{})
+	reg.Register("gzip", gzip.Impl{})
 	reg.Register("hostname", hostname.Impl{})
+	reg.Register("join", join.Impl{})
 	reg.Register("ls", ls.Impl{})
 	reg.Register("true", truecmd.Impl{})
 	reg.Register("unexpand", unexpand.Impl{})
+	reg.Register("zcat", zcat.Impl{})
 }
