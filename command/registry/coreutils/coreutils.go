@@ -10,6 +10,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/cut"
 	"tangled.org/xeiaso.net/kefka/command/internal/date"
 	"tangled.org/xeiaso.net/kefka/command/internal/diff"
+	"tangled.org/xeiaso.net/kefka/command/internal/dirname"
 	"tangled.org/xeiaso.net/kefka/command/internal/falsecmd"
 	"tangled.org/xeiaso.net/kefka/command/internal/hostname"
 	"tangled.org/xeiaso.net/kefka/command/internal/ls"
@@ -27,6 +28,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("cut", cut.Impl{})
 	reg.Register("date", date.Impl{})
 	reg.Register("diff", diff.Impl{})
+	reg.Register("dirname", dirname.Impl{})
 	reg.Register("false", falsecmd.Impl{})
 	reg.Register("hostname", hostname.Impl{})
 	reg.Register("ls", ls.Impl{})
