@@ -246,6 +246,47 @@ Summarise to the user:
 - which tests were added
 - any pre-existing repo issues observed but not addressed
 
+### 11. Commit (when asked)
+
+Only commit if the user explicitly asks. When they do, follow the
+`conventional-commits` skill and use the shape established by the
+prior ports in `git log` (`fcdeacb feat(command): port base64 from
+just-bash`):
+
+- Subject: `feat(command): port <name> from just-bash`
+- Body: one short paragraph explaining the WHY — what semantics this
+  mirrors (GNU coreutils / just-bash quirks), not what files changed
+- Stage explicitly: `git add command/internal/<name>/<name>.go
+  command/internal/<name>/<name>_test.go
+  command/registry/coreutils/coreutils.go` — never `git add -A`
+- Footers, in order:
+  - `Signed-off-by` via the `--signoff` flag passed to `git commit`.
+  - `Assisted-by: <model> via Claude Code`
+- Pass the message via heredoc to preserve newlines. The
+  `--signoff` flag is **not** needed because the trailer is already
+  in the heredoc; adding it would duplicate the line.
+
+Example:
+
+```bash
+git add command/internal/basename/basename.go \
+        command/internal/basename/basename_test.go \
+        command/registry/coreutils/coreutils.go
+git commit -m "$(cat <<'EOF'
+feat(command): port basename from just-bash
+
+Strip directory and suffix from filenames. Mirrors GNU basename
+semantics as implemented by just-bash, including the suffix-implies-
+multiple shorthand and empty output when the suffix equals the base.
+
+Signed-off-by: Xe Iaso <me@xeiaso.net>
+Assisted-by: Claude Opus 4.7 via Claude Code
+EOF
+)"
+```
+
+Do not push — the user pushes when they're ready.
+
 ## Things to deliberately drop
 
 The just-bash sources contain Node/browser-specific scaffolding that
