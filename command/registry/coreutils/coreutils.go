@@ -22,10 +22,13 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/hostname"
 	"tangled.org/xeiaso.net/kefka/command/internal/join"
 	"tangled.org/xeiaso.net/kefka/command/internal/ls"
+	"tangled.org/xeiaso.net/kefka/command/internal/md5sum"
 	"tangled.org/xeiaso.net/kefka/command/internal/mkdir"
 	"tangled.org/xeiaso.net/kefka/command/internal/mv"
 	"tangled.org/xeiaso.net/kefka/command/internal/nl"
 	"tangled.org/xeiaso.net/kefka/command/internal/paste"
+	"tangled.org/xeiaso.net/kefka/command/internal/sha1sum"
+	"tangled.org/xeiaso.net/kefka/command/internal/sha256sum"
 	"tangled.org/xeiaso.net/kefka/command/internal/truecmd"
 	"tangled.org/xeiaso.net/kefka/command/internal/unexpand"
 	"tangled.org/xeiaso.net/kefka/command/internal/zcat"
@@ -54,10 +57,13 @@ func Register(reg *registry.Impl) {
 	reg.Register("hostname", hostname.Impl{})
 	reg.Register("join", join.Impl{})
 	reg.Register("ls", ls.Impl{})
+	reg.Register("md5sum", md5sum.Impl{})
 	reg.Register("mkdir", mkdir.Impl{})
 	reg.Register("mv", mv.Impl{})
 	reg.Register("nl", nl.Impl{})
 	reg.Register("paste", paste.Impl{})
+	reg.Register("sha1sum", sha1sum.Impl{})
+	reg.Register("sha256sum", sha256sum.Impl{})
 	reg.Register("true", truecmd.Impl{})
 	reg.Register("unexpand", unexpand.Impl{})
 	reg.Register("zcat", zcat.Impl{})
