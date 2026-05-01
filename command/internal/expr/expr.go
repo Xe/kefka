@@ -348,33 +348,189 @@ func (p *parser) parsePrimary() (string, error) {
 }
 
 func matchAnchored(s, pattern string) (string, error) {
-	re, err := regexp.Compile("^" + pattern)
+	goPattern, err := breToGoRegex(pattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid regular expression: %s", pattern)
+	}
+	re, err := regexp.Compile("^(?:" + goPattern + ")")
 	if err != nil {
 		return "", fmt.Errorf("invalid regular expression: %s", pattern)
 	}
 	idx := re.FindStringSubmatchIndex(s)
 	if idx == nil {
+		// When the pattern contains a capture group and no match
+		// occurred, GNU expr prints an empty string with exit 1.
+		if re.NumSubexp() > 0 {
+			return "", nil
+		}
 		return "0", nil
 	}
-	if len(idx) >= 4 && idx[2] >= 0 {
-		return s[idx[2]:idx[3]], nil
+	if re.NumSubexp() > 0 {
+		if len(idx) >= 4 && idx[2] >= 0 {
+			return s[idx[2]:idx[3]], nil
+		}
+		return "", nil
 	}
 	return strconv.Itoa(idx[1] - idx[0]), nil
 }
 
 func matchUnanchored(s, pattern string) (string, error) {
-	re, err := regexp.Compile(pattern)
+	goPattern, err := breToGoRegex(pattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid regular expression: %s", pattern)
+	}
+	re, err := regexp.Compile(goPattern)
 	if err != nil {
 		return "", fmt.Errorf("invalid regular expression: %s", pattern)
 	}
 	idx := re.FindStringSubmatchIndex(s)
 	if idx == nil {
+		if re.NumSubexp() > 0 {
+			return "", nil
+		}
 		return "0", nil
 	}
-	if len(idx) >= 4 && idx[2] >= 0 {
-		return s[idx[2]:idx[3]], nil
+	if re.NumSubexp() > 0 {
+		if len(idx) >= 4 && idx[2] >= 0 {
+			return s[idx[2]:idx[3]], nil
+		}
+		return "", nil
 	}
 	return strconv.Itoa(idx[1] - idx[0]), nil
+}
+
+// breToGoRegex translates a POSIX Basic Regular Expression (BRE) into the
+// equivalent Go (RE2) regular expression syntax. BRE differs from Go regex in
+// the following ways that this translator handles:
+//
+//   - `\(` and `\)` denote grouping; `(` and `)` are literal.
+//   - `\{n,m\}` denotes an interval; `{` and `}` are literal.
+//   - A leading `*` (at the start of the pattern or just after `\(`) is
+//     literal, not a quantifier.
+//   - `\|`, `\+`, `\?` are not standard BRE alternation/quantifiers and are
+//     kept as their literal escaped forms in Go regex.
+//   - `\1`..`\9` backreferences are not supported by Go's RE2 engine and
+//     surface as a translation error.
+//   - `.`, `^`, `$`, and bracket expressions `[...]` retain their meaning.
+func breToGoRegex(bre string) (string, error) {
+	var out strings.Builder
+	atStart := true
+	// A "group start" is the position immediately after `\(`, where a
+	// leading `*` is also literal per POSIX.
+	afterGroupStart := false
+	for i := 0; i < len(bre); i++ {
+		c := bre[i]
+		switch c {
+		case '\\':
+			if i+1 >= len(bre) {
+				// Trailing backslash: keep it as a literal backslash escape.
+				out.WriteString(`\\`)
+				atStart = false
+				afterGroupStart = false
+				continue
+			}
+			next := bre[i+1]
+			switch next {
+			case '(':
+				out.WriteByte('(')
+				i++
+				atStart = false
+				afterGroupStart = true
+				continue
+			case ')':
+				out.WriteByte(')')
+				i++
+				atStart = false
+				afterGroupStart = false
+				continue
+			case '{':
+				// Interval: copy `{...\}` as `{...}`.
+				j := i + 2
+				out.WriteByte('{')
+				for j < len(bre) {
+					if bre[j] == '\\' && j+1 < len(bre) && bre[j+1] == '}' {
+						out.WriteByte('}')
+						j += 2
+						break
+					}
+					out.WriteByte(bre[j])
+					j++
+				}
+				i = j - 1
+				atStart = false
+				afterGroupStart = false
+				continue
+			case '1', '2', '3', '4', '5', '6', '7', '8', '9':
+				return "", fmt.Errorf("backreferences not supported")
+			case '.', '*', '[', ']', '^', '$', '\\':
+				// Pass through as escaped literal in Go regex too.
+				out.WriteByte('\\')
+				out.WriteByte(next)
+				i++
+				atStart = false
+				afterGroupStart = false
+				continue
+			default:
+				// Other `\X` sequences: pass through unchanged. This covers
+				// character classes like `\b` etc., which Go regex supports.
+				out.WriteByte('\\')
+				out.WriteByte(next)
+				i++
+				atStart = false
+				afterGroupStart = false
+				continue
+			}
+		case '(', ')':
+			// Literal parens in BRE — escape for Go regex.
+			out.WriteByte('\\')
+			out.WriteByte(c)
+			atStart = false
+			afterGroupStart = false
+		case '{', '}':
+			// Literal braces in BRE — escape for Go regex.
+			out.WriteByte('\\')
+			out.WriteByte(c)
+			atStart = false
+			afterGroupStart = false
+		case '*':
+			if atStart || afterGroupStart {
+				// Literal `*` at start of expression or just after `\(`.
+				out.WriteString(`\*`)
+			} else {
+				out.WriteByte('*')
+			}
+			atStart = false
+			afterGroupStart = false
+		case '[':
+			// Copy bracket expression verbatim. Handle a leading `]`
+			// (which is a literal in POSIX brackets) and a leading `^`.
+			out.WriteByte('[')
+			j := i + 1
+			if j < len(bre) && bre[j] == '^' {
+				out.WriteByte('^')
+				j++
+			}
+			if j < len(bre) && bre[j] == ']' {
+				out.WriteByte(']')
+				j++
+			}
+			for j < len(bre) && bre[j] != ']' {
+				out.WriteByte(bre[j])
+				j++
+			}
+			if j < len(bre) {
+				out.WriteByte(']')
+			}
+			i = j
+			atStart = false
+			afterGroupStart = false
+		default:
+			out.WriteByte(c)
+			atStart = false
+			afterGroupStart = false
+		}
+	}
+	return out.String(), nil
 }
 
 // jsParseInt mimics JavaScript's parseInt(s, 10): skip leading whitespace,

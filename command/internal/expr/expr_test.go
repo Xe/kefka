@@ -124,6 +124,12 @@ func TestExpr(t *testing.T) {
 			wantExit:   2,
 		},
 		{
+			name:       "addition with non-integer right operand",
+			args:       []string{"1", "+", "foo"},
+			wantStderr: "expr: non-integer argument\n",
+			wantExit:   2,
+		},
+		{
 			name:       "numeric equality true",
 			args:       []string{"3", "=", "3"},
 			wantStdout: "1\n",
@@ -199,8 +205,28 @@ func TestExpr(t *testing.T) {
 		},
 		{
 			name:       "match anchored capture group",
-			args:       []string{"abc123", ":", "abc([0-9]+)"},
+			args:       []string{"abc123", ":", `abc\([0-9]+\)`},
 			wantStdout: "123\n",
+		},
+		{
+			name:       "match anchored BRE grouping returns capture",
+			args:       []string{"abc", ":", `a\(b\)c`},
+			wantStdout: "b\n",
+		},
+		{
+			name:       "match anchored BRE dot returns whole match length",
+			args:       []string{"abc", ":", "a.c"},
+			wantStdout: "3\n",
+		},
+		{
+			name:       "match anchored BRE leading star is literal",
+			args:       []string{"*foo", ":", "*foo"},
+			wantStdout: "4\n",
+		},
+		{
+			name:       "match anchored BRE interval",
+			args:       []string{"aaa", ":", `a\{2\}`},
+			wantStdout: "2\n",
 		},
 		{
 			name:       "match function unanchored returns length",
@@ -209,7 +235,7 @@ func TestExpr(t *testing.T) {
 		},
 		{
 			name:       "match function with capture",
-			args:       []string{"match", "hello world", "(w[a-z]+)"},
+			args:       []string{"match", "hello world", `\(w[a-z]+\)`},
 			wantStdout: "world\n",
 		},
 		{
