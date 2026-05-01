@@ -1,15 +1,18 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 
+	"github.com/go-git/go-billy/v5"
 	"github.com/pborman/getopt/v2"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
@@ -34,6 +37,35 @@ func resolvePath(ec *command.ExecContext, p string) string {
 		return "."
 	}
 	return joined
+}
+
+// statPath stats p, optionally without following the final symlink. When
+// follow is false and the underlying filesystem implements
+// billy.Symlink, Lstat is used so that the symlink itself is reported.
+// When the filesystem doesn't expose Lstat the call gracefully degrades
+// to Stat (links are always followed); this matches kefka's behavior in
+// other commands like cp.
+func statPath(fsys billy.Filesystem, p string, follow bool) (os.FileInfo, error) {
+	if !follow {
+		if sl, ok := fsys.(billy.Symlink); ok {
+			return sl.Lstat(p)
+		}
+	}
+	return fsys.Stat(p)
+}
+
+// readlink returns the target of a symlink at p, or an empty string if
+// the underlying filesystem doesn't support it or the call fails.
+func readlink(fsys billy.Filesystem, p string) string {
+	sl, ok := fsys.(billy.Symlink)
+	if !ok {
+		return ""
+	}
+	target, err := sl.Readlink(p)
+	if err != nil {
+		return ""
+	}
+	return target
 }
 
 func getExtension(filename string) string {
@@ -143,9 +175,97 @@ func detectTextType(content string, filename string) string {
 	return "ASCII text" + lineEnding
 }
 
+// detectMagic inspects the leading bytes of data and returns a
+// human-readable description of well-known binary formats. The empty
+// string means no magic-byte signature matched.
+//
+// This is a deliberately small subset of libmagic; it covers the most
+// frequent formats encountered in practice. The descriptions are kept
+// close to BSD `file(1)` output where reasonable, but we do not try to
+// extract version numbers or sub-format details that would require a
+// proper parser.
+func detectMagic(data []byte) string {
+	switch {
+	case len(data) >= 4 && bytes.Equal(data[:4], []byte{0x7f, 'E', 'L', 'F'}):
+		// ELFCLASS at offset 4: 1 = 32-bit, 2 = 64-bit.
+		bits := "32-bit"
+		if len(data) > 4 && data[4] == 2 {
+			bits = "64-bit"
+		}
+		// EI_DATA at offset 5: 1 = LSB, 2 = MSB.
+		endian := "LSB"
+		if len(data) > 5 && data[5] == 2 {
+			endian = "MSB"
+		}
+		return "ELF " + bits + " " + endian + " executable"
+	case len(data) >= 2 && data[0] == 'M' && data[1] == 'Z':
+		return "PE32 executable (MS-DOS)"
+	case len(data) >= 3 && bytes.Equal(data[:3], []byte{0x1f, 0x8b, 0x08}):
+		return "gzip compressed data"
+	case len(data) >= 4 && bytes.Equal(data[:4], []byte("PK\x03\x04")):
+		return "Zip archive data"
+	case len(data) >= 4 && bytes.Equal(data[:4], []byte("PK\x05\x06")):
+		return "Zip archive data (empty)"
+	case len(data) >= 3 && bytes.Equal(data[:3], []byte{0xff, 0xd8, 0xff}):
+		return "JPEG image data"
+	case len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")):
+		return "PNG image data"
+	case len(data) >= 4 && bytes.Equal(data[:4], []byte("%PDF")):
+		return "PDF document"
+	case len(data) >= 6 && (bytes.Equal(data[:6], []byte("GIF87a")) || bytes.Equal(data[:6], []byte("GIF89a"))):
+		return "GIF image data"
+	case len(data) >= 2 && bytes.Equal(data[:2], []byte("BZ")) && len(data) >= 3 && data[2] == 'h':
+		return "bzip2 compressed data"
+	case len(data) >= 6 && bytes.Equal(data[:6], []byte{0xfd, '7', 'z', 'X', 'Z', 0x00}):
+		return "XZ compressed data"
+	case len(data) >= 4 && bytes.Equal(data[:4], []byte("Rar!")):
+		return "RAR archive data"
+	case len(data) >= 4 && bytes.Equal(data[:4], []byte("\x7fELF")):
+		// Covered by first case, but kept here so the reader sees it.
+		return "ELF executable"
+	case len(data) >= 4 && bytes.Equal(data[:4], []byte{0xca, 0xfe, 0xba, 0xbe}):
+		return "Java class data"
+	case len(data) >= 4 && bytes.Equal(data[:4], []byte{0x00, 0x61, 0x73, 0x6d}):
+		return "WebAssembly (wasm) binary module"
+	case len(data) >= 4 && bytes.Equal(data[:4], []byte("OggS")):
+		return "Ogg data"
+	}
+	return ""
+}
+
+// magicMIME maps the human-readable magic descriptions returned by
+// detectMagic to MIME types. Keys are matched as prefixes so that
+// suffixes like ", with extra info" do not break the mapping.
+var magicMIME = []struct {
+	prefix string
+	mime   string
+}{
+	{"ELF", "application/x-executable"},
+	{"PE32 executable", "application/vnd.microsoft.portable-executable"},
+	{"gzip compressed", "application/gzip"},
+	{"Zip archive", "application/zip"},
+	{"JPEG image", "image/jpeg"},
+	{"PNG image", "image/png"},
+	{"GIF image", "image/gif"},
+	{"PDF document", "application/pdf"},
+	{"bzip2 compressed", "application/x-bzip2"},
+	{"XZ compressed", "application/x-xz"},
+	{"RAR archive", "application/vnd.rar"},
+	{"Java class", "application/x-java-applet"},
+	{"WebAssembly", "application/wasm"},
+	{"Ogg data", "application/ogg"},
+}
+
 func detectFileType(filename string, data []byte) string {
 	if len(data) == 0 {
 		return "empty"
+	}
+
+	// Magic-byte detection takes precedence: it is more reliable than
+	// extension hints for common binary formats and catches files where
+	// http.DetectContentType returns "application/octet-stream".
+	if magic := detectMagic(data); magic != "" {
+		return magic
 	}
 
 	mimeType := http.DetectContentType(data)
@@ -209,16 +329,18 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	usage := func() {
 		fmt.Fprint(stderr, "Usage: file [OPTION]... FILE...\n")
 		fmt.Fprint(stderr, "Determine file type.\n\n")
-		fmt.Fprint(stderr, "  -b, --brief          do not prepend filenames to output\n")
-		fmt.Fprint(stderr, "  -i, --mime           output MIME type strings\n")
-		fmt.Fprint(stderr, "  -L, --dereference    follow symlinks\n")
-		fmt.Fprint(stderr, "      --help           display this help and exit\n")
+		fmt.Fprint(stderr, "  -b, --brief             do not prepend filenames to output\n")
+		fmt.Fprint(stderr, "  -i, --mime              output MIME type strings\n")
+		fmt.Fprint(stderr, "  -h, --no-dereference    do not follow symlinks (default)\n")
+		fmt.Fprint(stderr, "  -L, --dereference       follow symlinks\n")
+		fmt.Fprint(stderr, "      --help              display this help and exit\n")
 	}
 	set.SetUsage(usage)
 
 	brief := set.BoolLong("brief", 'b', "do not prepend filenames to output")
 	mimeMode := set.BoolLong("mime", 'i', "output MIME type strings")
-	_ = set.BoolLong("dereference", 'L', "follow symlinks")
+	noDeref := set.BoolLong("no-dereference", 'h', "do not follow symlinks")
+	deref := set.BoolLong("dereference", 'L', "follow symlinks")
 	help := set.BoolLong("help", 0, "display this help and exit")
 
 	if err := set.Getopt(append([]string{"file"}, args...), nil); err != nil {
@@ -237,12 +359,23 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		return interp.ExitStatus(1)
 	}
 
+	// `-L` forces dereferencing; `-h` disables it. When both are supplied
+	// the last-wins behavior matches BSD `file(1)`. By default we follow
+	// symlinks, matching the BSD convention.
+	follow := true
+	if *noDeref {
+		follow = false
+	}
+	if *deref {
+		follow = true
+	}
+
 	exitCode := 0
 
 	for _, name := range files {
 		p := resolvePath(ec, name)
 
-		info, err := ec.FS.Stat(p)
+		info, err := statPath(ec.FS, p, follow)
 		if err != nil {
 			if *brief {
 				fmt.Fprintln(stdout, "cannot open")
@@ -250,6 +383,24 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 				fmt.Fprintf(stdout, "%s: cannot open (No such file or directory)\n", name)
 			}
 			exitCode = 1
+			continue
+		}
+
+		// Symlink that we are not dereferencing.
+		if info.Mode()&os.ModeSymlink != 0 {
+			target := readlink(ec.FS, p)
+			result := "symbolic link"
+			if target != "" {
+				result = "symbolic link to " + target
+			}
+			if *mimeMode {
+				result = "inode/symlink"
+			}
+			if *brief {
+				fmt.Fprintln(stdout, result)
+			} else {
+				fmt.Fprintf(stdout, "%s: %s\n", name, result)
+			}
 			continue
 		}
 
@@ -313,6 +464,15 @@ func toMIME(desc string, filename string) string {
 		return "inode/x-empty"
 	case "directory":
 		return "inode/directory"
+	case "symbolic link":
+		return "inode/symlink"
+	}
+
+	// Magic-byte descriptions map to specific MIME types.
+	for _, m := range magicMIME {
+		if strings.HasPrefix(desc, m.prefix) {
+			return m.mime
+		}
 	}
 
 	// If detectFileType already returned a MIME type via

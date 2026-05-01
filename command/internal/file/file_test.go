@@ -36,8 +36,37 @@ func newFS(t *testing.T) billy.Filesystem {
 	write("binary.bin", []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00}) // PNG header
 	write("subdir/inner.txt", []byte("inner"))
 
+	// ELF: \x7fELF, ELFCLASS64, EI_DATA LSB. Padded to 16 bytes (e_ident).
+	write("hello.elf", []byte{
+		0x7f, 'E', 'L', 'F',
+		2, 1, 1, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+	})
+	// gzip magic + minimal header.
+	write("data.gz", []byte{
+		0x1f, 0x8b, 0x08, 0x00,
+		0, 0, 0, 0, 0, 0,
+	})
+	// PNG bytes saved to a name with no extension hint, to verify magic
+	// detection runs even when extensions don't help.
+	write("unknown.bin", []byte{
+		0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a,
+		0, 0, 0, 0,
+	})
+	// PDF.
+	write("doc.pdf", []byte("%PDF-1.4\n"))
+	// JPEG.
+	write("photo.jpg", []byte{0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 'J', 'F', 'I', 'F', 0})
+	// Zip.
+	write("archive.zip", []byte{'P', 'K', 0x03, 0x04, 0, 0, 0, 0})
+
 	// Create directory manually
 	fs.MkdirAll("mydir", 0o755)
+
+	// Symlink (best-effort: memfs implements billy.Symlink).
+	if sl, ok := fs.(billy.Symlink); ok {
+		_ = sl.Symlink("hello.txt", "link.txt")
+	}
 	return fs
 }
 
@@ -102,7 +131,7 @@ func TestExec(t *testing.T) {
 		{
 			name:       "png binary",
 			args:       []string{"binary.bin"},
-			wantStdout: "binary.bin: image/png\n",
+			wantStdout: "binary.bin: PNG image data\n",
 		},
 		{
 			name:       "directory",
@@ -172,10 +201,11 @@ func TestExec(t *testing.T) {
 			args: []string{"--help"},
 			wantStderr: "Usage: file [OPTION]... FILE...\n" +
 				"Determine file type.\n\n" +
-				"  -b, --brief          do not prepend filenames to output\n" +
-				"  -i, --mime           output MIME type strings\n" +
-				"  -L, --dereference    follow symlinks\n" +
-				"      --help           display this help and exit\n",
+				"  -b, --brief             do not prepend filenames to output\n" +
+				"  -i, --mime              output MIME type strings\n" +
+				"  -h, --no-dereference    do not follow symlinks (default)\n" +
+				"  -L, --dereference       follow symlinks\n" +
+				"      --help              display this help and exit\n",
 		},
 		{
 			name:    "unknown flag",
@@ -184,10 +214,11 @@ func TestExec(t *testing.T) {
 			wantStderr: "file: unknown option: --nope\n" +
 				"Usage: file [OPTION]... FILE...\n" +
 				"Determine file type.\n\n" +
-				"  -b, --brief          do not prepend filenames to output\n" +
-				"  -i, --mime           output MIME type strings\n" +
-				"  -L, --dereference    follow symlinks\n" +
-				"      --help           display this help and exit\n",
+				"  -b, --brief             do not prepend filenames to output\n" +
+				"  -i, --mime              output MIME type strings\n" +
+				"  -h, --no-dereference    do not follow symlinks (default)\n" +
+				"  -L, --dereference       follow symlinks\n" +
+				"      --help              display this help and exit\n",
 		},
 		{
 			name:       "subdirectory file",
@@ -198,6 +229,81 @@ func TestExec(t *testing.T) {
 			name:       "dereference flag accepted",
 			args:       []string{"-L", "hello.txt"},
 			wantStdout: "hello.txt: ASCII text\n",
+		},
+		{
+			name:       "elf magic",
+			args:       []string{"hello.elf"},
+			wantStdout: "hello.elf: ELF 64-bit LSB executable\n",
+		},
+		{
+			name:       "gzip magic",
+			args:       []string{"data.gz"},
+			wantStdout: "data.gz: gzip compressed data\n",
+		},
+		{
+			name:       "pdf magic",
+			args:       []string{"doc.pdf"},
+			wantStdout: "doc.pdf: PDF document\n",
+		},
+		{
+			name:       "jpeg magic",
+			args:       []string{"photo.jpg"},
+			wantStdout: "photo.jpg: JPEG image data\n",
+		},
+		{
+			name:       "zip magic",
+			args:       []string{"archive.zip"},
+			wantStdout: "archive.zip: Zip archive data\n",
+		},
+		{
+			name:       "binary content no extension",
+			args:       []string{"unknown.bin"},
+			wantStdout: "unknown.bin: PNG image data\n",
+		},
+		{
+			name:       "mime mode elf",
+			args:       []string{"-i", "hello.elf"},
+			wantStdout: "hello.elf: application/x-executable\n",
+		},
+		{
+			name:       "mime mode gzip",
+			args:       []string{"-i", "data.gz"},
+			wantStdout: "data.gz: application/gzip\n",
+		},
+		{
+			name:       "mime mode png unknown extension",
+			args:       []string{"-i", "unknown.bin"},
+			wantStdout: "unknown.bin: image/png\n",
+		},
+		{
+			name:       "brief mime gzip",
+			args:       []string{"-bi", "data.gz"},
+			wantStdout: "application/gzip\n",
+		},
+		{
+			name:       "symlink no-dereference",
+			args:       []string{"-h", "link.txt"},
+			wantStdout: "link.txt: symbolic link to hello.txt\n",
+		},
+		{
+			name:       "symlink no-dereference brief",
+			args:       []string{"-bh", "link.txt"},
+			wantStdout: "symbolic link to hello.txt\n",
+		},
+		{
+			name:       "symlink no-dereference mime",
+			args:       []string{"-hi", "link.txt"},
+			wantStdout: "link.txt: inode/symlink\n",
+		},
+		{
+			name:       "symlink follows by default",
+			args:       []string{"link.txt"},
+			wantStdout: "link.txt: ASCII text\n",
+		},
+		{
+			name:       "L overrides h when both given",
+			args:       []string{"-h", "-L", "link.txt"},
+			wantStdout: "link.txt: ASCII text\n",
 		},
 	}
 
