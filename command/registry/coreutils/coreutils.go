@@ -12,6 +12,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/diff"
 	"tangled.org/xeiaso.net/kefka/command/internal/dirname"
 	"tangled.org/xeiaso.net/kefka/command/internal/du"
+	"tangled.org/xeiaso.net/kefka/command/internal/env"
 	"tangled.org/xeiaso.net/kefka/command/internal/expand"
 	"tangled.org/xeiaso.net/kefka/command/internal/expr"
 	"tangled.org/xeiaso.net/kefka/command/internal/file"
@@ -29,6 +30,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/nl"
 	"tangled.org/xeiaso.net/kefka/command/internal/od"
 	"tangled.org/xeiaso.net/kefka/command/internal/paste"
+	"tangled.org/xeiaso.net/kefka/command/internal/printenv"
 	"tangled.org/xeiaso.net/kefka/command/internal/printf"
 	"tangled.org/xeiaso.net/kefka/command/internal/pwd"
 	"tangled.org/xeiaso.net/kefka/command/internal/readlink"
@@ -68,6 +70,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("diff", diff.Impl{})
 	reg.Register("dirname", dirname.Impl{})
 	reg.Register("du", du.Impl{})
+	reg.Register("env", env.Impl{})
 	reg.Register("expand", expand.Impl{})
 	reg.Register("expr", expr.Impl{})
 	reg.Register("file", file.Impl{})
@@ -85,6 +88,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("nl", nl.Impl{})
 	reg.Register("od", od.Impl{})
 	reg.Register("paste", paste.Impl{})
+	reg.Register("printenv", printenv.Impl{})
 	reg.Register("printf", printf.Impl{})
 	reg.Register("pwd", pwd.Impl{})
 	reg.Register("readlink", readlink.Impl{})
