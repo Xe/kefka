@@ -7,21 +7,20 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/joho/godotenv"
+	"github.com/spf13/pflag"
+	"tangled.org/xeiaso.net/kefka/internal/s3fs"
+
+	_ "github.com/joho/godotenv/autoload"
 )
 
-var BucketName string
-
-func init() {
-	err := godotenv.Load()
-	if err != nil {
-		panic(err)
-	}
-	BucketName = os.Getenv("BUCKET_NAME")
-}
+var (
+	bucket = pflag.String("bucket", os.Getenv("BUCKET_NAME"), "bucket to operate on")
+)
 
 func main() {
-	// fmt.Println(BucketName)
+	pflag.Parse()
+
+	fmt.Println(*bucket)
 
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
@@ -29,7 +28,7 @@ func main() {
 	}
 	client := s3.NewFromConfig(cfg)
 
-	s3fs, err := NewS3FS(client, BucketName)
+	s3fs, err := s3fs.NewS3FS(client, *bucket)
 	if err != nil {
 		panic(err)
 	}
@@ -44,5 +43,4 @@ func main() {
 	for _, file := range files {
 		fmt.Println(file.Name())
 	}
-
 }

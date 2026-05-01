@@ -1,6 +1,6 @@
 // tempfile.go implements the interface billy.TempFile
 
-package main
+package s3fs
 
 import "github.com/go-git/go-billy/v5"
 

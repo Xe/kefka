@@ -1,6 +1,6 @@
 // basic.go implements the interface billy.Basic
 
-package main
+package s3fs
 
 import (
 	"context"

@@ -1,6 +1,6 @@
 // chroot.go implements the interface billy.Chroot
 
-package main
+package s3fs
 
 import "github.com/go-git/go-billy/v5"
 

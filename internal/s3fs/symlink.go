@@ -1,6 +1,6 @@
 // symlink.go implements the interface billy.Symlink
 
-package main
+package s3fs
 
 import (
 	"errors"

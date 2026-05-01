@@ -1,6 +1,6 @@
 // dir.go implements the interface billy.Dir
 
-package main
+package s3fs
 
 import (
 	"context"
