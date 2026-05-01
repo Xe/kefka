@@ -81,7 +81,9 @@ func run(ctx context.Context) error {
 }
 
 func runReader(ctx context.Context, sh *interp.Runner, in io.Reader, name string) error {
-	prog, err := syntax.NewParser().Parse(in, name)
+	prog, err := syntax.NewParser(
+		syntax.Variant(syntax.LangBash),
+	).Parse(in, name)
 	if err != nil {
 		return err
 	}
