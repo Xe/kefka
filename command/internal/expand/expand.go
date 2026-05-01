@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/pborman/getopt/v2"
+	"golang.org/x/text/width"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
 )
@@ -118,13 +119,13 @@ func getTabWidth(column int, tabStops []int) int {
 			return stop - column
 		}
 	}
-	if len(tabStops) >= 2 {
-		last := tabStops[len(tabStops)-1]
-		prev := tabStops[len(tabStops)-2]
-		interval := last - prev
-		steps := (column-last)/interval + 1
-		next := last + steps*interval
-		return next - column
+	return 1
+}
+
+func runeWidth(r rune) int {
+	switch width.LookupRune(r).Kind() {
+	case width.EastAsianWide, width.EastAsianFullwidth:
+		return 2
 	}
 	return 1
 }
@@ -151,7 +152,7 @@ func expandLine(line string, tabStops []int, leadingOnly bool) string {
 			inLeading = false
 		}
 		result.WriteRune(r)
-		column++
+		column += runeWidth(r)
 	}
 	return result.String()
 }

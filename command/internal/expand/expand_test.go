@@ -89,10 +89,46 @@ func TestExpand(t *testing.T) {
 			wantStdout: "            end\n",
 		},
 		{
-			name:       "explicit tab stops past last uses last interval",
+			name:       "explicit tab stops past last become single space",
 			args:       []string{"-t", "4,8"},
 			stdin:      "a\t\t\tx\n",
-			wantStdout: "a" + strings.Repeat(" ", 11) + "x\n",
+			wantStdout: "a" + strings.Repeat(" ", 8) + "x\n",
+		},
+		{
+			name:       "multi-stop several tabs past last each one space",
+			args:       []string{"-t", "4,8"},
+			stdin:      "12345678\t\t\tx\n",
+			wantStdout: "12345678   x\n",
+		},
+		{
+			name:       "narrow rune counts as one column",
+			args:       nil,
+			stdin:      "λ\tx\n",
+			wantStdout: "λ" + strings.Repeat(" ", 7) + "x\n",
+		},
+		{
+			name:       "wide rune counts as two columns",
+			args:       nil,
+			stdin:      "中\tx\n",
+			wantStdout: "中" + strings.Repeat(" ", 6) + "x\n",
+		},
+		{
+			name:       "wide rune 日 counts as two columns",
+			args:       nil,
+			stdin:      "日\tx\n",
+			wantStdout: "日" + strings.Repeat(" ", 6) + "x\n",
+		},
+		{
+			name:       "mixed narrow and wide runes",
+			args:       nil,
+			stdin:      "a中\tb\n",
+			wantStdout: "a中" + strings.Repeat(" ", 5) + "b\n",
+		},
+		{
+			name:       "leading-only kefka extension preserves interior tabs after text",
+			args:       []string{"-i"},
+			stdin:      "leading\tword\ttrailing\n",
+			wantStdout: "leading\tword\ttrailing\n",
 		},
 		{
 			name:       "leading-only short flag preserves interior tabs",
@@ -111,6 +147,12 @@ func TestExpand(t *testing.T) {
 			args:       []string{"-i", "-t", "4"},
 			stdin:      " \tfoo\tbar\n",
 			wantStdout: "    foo\tbar\n",
+		},
+		{
+			name:       "leading-only with space-then-tab leading and interior tab",
+			args:       []string{"-i"},
+			stdin:      " \tword\ttrailing\n",
+			wantStdout: "        word\ttrailing\n",
 		},
 		{
 			name:       "expand from file",
