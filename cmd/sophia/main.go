@@ -8,7 +8,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
-	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -123,7 +123,78 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 		return fmt.Errorf("can't setup s3fs: %w", err)
 	}
 
-	t := term.NewTerminal(sess, "$ ")
+	// Wire stdio for the shell through real *os.File pipes. The kefka CLI
+	// gets *os.File via os.Stdin/Stdout/Stderr; sophia previously handed
+	// the shell strings.NewReader("") plus a *term.Terminal, which forces
+	// wazero down its non-*os.File path. That path reports stdio as
+	// FILETYPE_BLOCK_DEVICE to WASI guests and trips up wasi-libc's
+	// isatty/buffering detection in python.wasm and qjs.wasm.
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("can't open stdin pipe: %w", err)
+	}
+	defer stdinR.Close()
+	defer stdinW.Close()
+
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("can't open stdout pipe: %w", err)
+	}
+	defer stdoutR.Close()
+	defer stdoutW.Close()
+
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("can't open stderr pipe: %w", err)
+	}
+	defer stderrR.Close()
+	defer stderrW.Close()
+
+	// commandActive is true while the foreground command (sh.Run) is
+	// executing. It gates the input-side line discipline below: term.Terminal
+	// already echoes during the prompt, so we only echo during command mode.
+	var commandActive atomic.Bool
+
+	// Pump SSH client bytes into the shared stdin pipe. Both term.Terminal
+	// (for the prompt) and running wasm commands read from stdinR; they
+	// alternate in time, so a single pump is race-free.
+	//
+	// Two pieces of line discipline that a kernel PTY would normally do for
+	// us, done here in software:
+	//   - ICRNL: translate \r (the Enter key on a raw SSH channel) to \n,
+	//     so line-mode WASI readers like Python's fgets recognize Enter.
+	//     term.Terminal accepts either, so the prompt is unaffected.
+	//   - ECHO: while a command is running, echo typed bytes back to the
+	//     SSH client so REPLs (qjs, python -i) aren't typing blind.
+	go func() {
+		defer stdinW.Close()
+		buf := make([]byte, 4096)
+		for {
+			n, err := sess.Read(buf)
+			if n > 0 {
+				for i := range buf[:n] {
+					if buf[i] == '\r' {
+						buf[i] = '\n'
+					}
+				}
+				if commandActive.Load() {
+					echoLineDiscipline(sess, buf[:n])
+				}
+				if _, werr := stdinW.Write(buf[:n]); werr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Drain guest stdout/stderr into the terminal, which handles \n→\r\n
+	// translation in writeWithCRLF.
+	t := term.NewTerminal(sessRW{r: stdinR, w: sess}, "$ ")
+	go io.Copy(t, stdoutR)
+	go io.Copy(t, stderrR)
 
 	var sh *interp.Runner
 
@@ -149,7 +220,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 	sh, err = interp.New(
 		interp.Interactive(true),
 		interp.Env(env),
-		interp.StdIO(strings.NewReader(""), t, t),
+		interp.StdIO(stdinR, stdoutW, stderrW),
 		interp.ExecHandlers(middleware),
 		interp.CallHandler(billysh.CallHandler(s.reg, fsys, os.Stdout, os.Stderr)),
 		interp.StatHandler(billysh.FsysStatHandler(s.reg, fsys)),
@@ -179,7 +250,9 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 
 		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 		for _, stmt := range stmts {
+			commandActive.Store(true)
 			runErr := sh.Run(ctx, stmt)
+			commandActive.Store(false)
 			if sh.Exited() {
 				cancel()
 				return runErr
@@ -195,6 +268,37 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 
 	return nil
 }
+
+// echoLineDiscipline writes buf to w, expanding \n to \r\n so the terminal
+// returns to column 0 after a line. Used to echo typed bytes back to the
+// SSH client during command mode (where no kernel PTY does it for us).
+func echoLineDiscipline(w io.Writer, buf []byte) {
+	start := 0
+	for i, b := range buf {
+		if b == '\n' {
+			if i > start {
+				w.Write(buf[start:i])
+			}
+			w.Write([]byte{'\r', '\n'})
+			start = i + 1
+		}
+	}
+	if start < len(buf) {
+		w.Write(buf[start:])
+	}
+}
+
+// sessRW wires term.Terminal's input to a separately-fed reader (typically
+// a pipe driven by a goroutine copying from the SSH session) while keeping
+// writes going to the SSH session directly. This lets us share a single
+// stdin source between the prompt and any running command.
+type sessRW struct {
+	r io.Reader
+	w io.Writer
+}
+
+func (s sessRW) Read(p []byte) (int, error)  { return s.r.Read(p) }
+func (s sessRW) Write(p []byte) (int, error) { return s.w.Write(p) }
 
 // termLineReader adapts term.Terminal.ReadLine into an io.Reader that emits
 // one line (with a trailing '\n') per ReadLine call, so the bash parser can
