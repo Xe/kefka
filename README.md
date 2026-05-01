@@ -1,4 +1,4 @@
-# kefka
+# Kefka
 
 ![](./docs/img/kefka.jpg)
 
