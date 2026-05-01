@@ -3,6 +3,7 @@ package tee
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -127,6 +128,27 @@ func TestTee(t *testing.T) {
 			wantFiles:  map[string]string{"bin.dat": "a\x00b\xffc"},
 		},
 		{
+			name:       "ignore-interrupts short flag is accepted as no-op",
+			args:       []string{"-i", "out.txt"},
+			stdin:      "hello",
+			wantStdout: "hello",
+			wantFiles:  map[string]string{"out.txt": "hello"},
+		},
+		{
+			name:       "ignore-interrupts long flag is accepted as no-op",
+			args:       []string{"--ignore-interrupts", "out.txt"},
+			stdin:      "hello",
+			wantStdout: "hello",
+			wantFiles:  map[string]string{"out.txt": "hello"},
+		},
+		{
+			name:       "append plus ignore-interrupts combined short flags",
+			args:       []string{"-ai", "existing.txt"},
+			stdin:      "added\n",
+			wantStdout: "added\n",
+			wantFiles:  map[string]string{"existing.txt": "old contents\nadded\n"},
+		},
+		{
 			name:    "unknown flag errors",
 			args:    []string{"--nope"},
 			wantErr: true,
@@ -177,6 +199,68 @@ func TestNilFSWithFiles(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "tee: out.txt: No such file or directory") {
 		t.Errorf("stderr missing expected message: %q", stderr.String())
+	}
+}
+
+// failingFS wraps a billy.Filesystem and forces OpenFile to fail with errFail
+// for any path equal to failPath. Every other call delegates to the inner FS.
+type failingFS struct {
+	billy.Filesystem
+	failPath string
+	errFail  error
+}
+
+func (f *failingFS) OpenFile(name string, flag int, perm os.FileMode) (billy.File, error) {
+	if name == f.failPath {
+		return nil, &os.PathError{Op: "open", Path: name, Err: f.errFail}
+	}
+	return f.Filesystem.OpenFile(name, flag, perm)
+}
+
+func (f *failingFS) Create(name string) (billy.File, error) {
+	if name == f.failPath {
+		return nil, &os.PathError{Op: "create", Path: name, Err: f.errFail}
+	}
+	return f.Filesystem.Create(name)
+}
+
+func TestFailureOnOneFileKeepsWritingOthers(t *testing.T) {
+	inner := memfs.New()
+	fs := &failingFS{
+		Filesystem: inner,
+		failPath:   "bad.txt",
+		errFail:    errors.New("Permission denied"),
+	}
+
+	var stdout, stderr bytes.Buffer
+	ec := &command.ExecContext{
+		Stdin:  strings.NewReader("payload\n"),
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Dir:    ".",
+		FS:     fs,
+	}
+
+	err := Impl{}.Exec(context.Background(), ec, []string{"good1.txt", "bad.txt", "good2.txt"})
+	if err == nil {
+		t.Fatalf("expected non-nil error (exit status), got nil; stderr=%q", stderr.String())
+	}
+
+	if stdout.String() != "payload\n" {
+		t.Errorf("stdout = %q, want %q", stdout.String(), "payload\n")
+	}
+	if got := readFile(t, inner, "good1.txt"); got != "payload\n" {
+		t.Errorf("good1.txt = %q, want %q (failure on bad.txt must not abort prior writes)", got, "payload\n")
+	}
+	if got := readFile(t, inner, "good2.txt"); got != "payload\n" {
+		t.Errorf("good2.txt = %q, want %q (failure on bad.txt must not stop later writes)", got, "payload\n")
+	}
+	if !strings.Contains(stderr.String(), "tee: bad.txt: Permission denied") {
+		t.Errorf("stderr missing per-file failure message: %q", stderr.String())
+	}
+	// The good files must not show up in stderr.
+	if strings.Contains(stderr.String(), "good1.txt") || strings.Contains(stderr.String(), "good2.txt") {
+		t.Errorf("stderr should only mention the failing file: %q", stderr.String())
 	}
 }
 

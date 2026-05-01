@@ -37,12 +37,17 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 	usage := func() {
 		fmt.Fprint(stderr, "Usage: tee [OPTION]... [FILE]...\n")
 		fmt.Fprint(stderr, "Copy standard input to each FILE, and also to standard output.\n\n")
-		fmt.Fprint(stderr, "  -a, --append      append to the given FILEs, do not overwrite\n")
-		fmt.Fprint(stderr, "      --help        display this help and exit\n")
+		fmt.Fprint(stderr, "  -a, --append              append to the given FILEs, do not overwrite\n")
+		fmt.Fprint(stderr, "  -i, --ignore-interrupts   ignore interrupt signals\n")
+		fmt.Fprint(stderr, "      --help                display this help and exit\n")
 	}
 	set.SetUsage(usage)
 
 	appendMode := set.BoolLong("append", 'a', "append to the given FILEs, do not overwrite")
+	// -i is accepted for GNU coreutils 9.x compatibility but is a no-op:
+	// kefka runs in-process under mvdan.cc/sh, so signal handling is the
+	// host shell's responsibility, not ours.
+	_ = set.BoolLong("ignore-interrupts", 'i', "ignore interrupt signals")
 	help := set.BoolLong("help", 0, "display this help and exit")
 
 	if err := set.Getopt(append([]string{"tee"}, args...), nil); err != nil {
@@ -54,7 +59,6 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 		usage()
 		return nil
 	}
-
 	files := set.Args()
 
 	var content []byte
@@ -67,10 +71,12 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 		content = data
 	}
 
+	// GNU tee continues writing to remaining files (and to stdout) when one
+	// file fails; it just exits non-zero at the end.
 	exitCode := 0
 	for _, file := range files {
 		if err := writeFile(ec, file, content, *appendMode); err != nil {
-			fmt.Fprintf(stderr, "tee: %s: No such file or directory\n", file)
+			fmt.Fprintf(stderr, "tee: %s: %s\n", file, errMessage(err))
 			exitCode = 1
 		}
 	}
@@ -84,6 +90,20 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 		return interp.ExitStatus(uint8(exitCode))
 	}
 	return nil
+}
+
+// errMessage extracts a GNU-tee-style short error message from err. Billy
+// returns wrapped *PathError values for most failures; the underlying error's
+// Error() is what GNU coreutils prints (e.g. "Permission denied"). When we
+// can't pull a more specific cause out, we default to "No such file or
+// directory" — billy's memfs does not always wrap missing-parent errors as
+// *PathError, and this matches what users hit most often.
+func errMessage(err error) string {
+	var pe *os.PathError
+	if errors.As(err, &pe) && pe.Err != nil {
+		return pe.Err.Error()
+	}
+	return "No such file or directory"
 }
 
 func writeFile(ec *command.ExecContext, file string, content []byte, appendMode bool) error {
