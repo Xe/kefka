@@ -29,6 +29,9 @@ func newFS(t *testing.T) billy.Filesystem {
 	write("empty.txt", []byte(""))
 	write("part1.txt", []byte("a\nb\n"))
 	write("part2.txt", []byte("c\nd\n"))
+	write("sections.txt", []byte("\\:\\:\\:\nh1\nh2\n\\:\\:\nb1\n\nb2\n\\:\nf1\nf2\n"))
+	write("manyblanks.txt", []byte("a\n\n\n\n\nb\n\n\n\n\nc\n"))
+	write("custom.txt", []byte("#@#@#@\nh1\n#@#@\nb1\n#@\nf1\n"))
 	return fs
 }
 
@@ -64,7 +67,7 @@ func TestNl(t *testing.T) {
 		{
 			name:       "default skips blank lines (style t)",
 			args:       []string{"blanks.txt"},
-			wantStdout: "     1\talpha\n      \t\n     2\tbravo\n      \t\n     3\tcharlie\n",
+			wantStdout: "     1\talpha\n       \n     2\tbravo\n       \n     3\tcharlie\n",
 		},
 		{
 			name:       "style a numbers all lines",
@@ -74,7 +77,7 @@ func TestNl(t *testing.T) {
 		{
 			name:       "style n numbers no lines",
 			args:       []string{"-b", "n", "hello.txt"},
-			wantStdout: "      \thello\n      \tworld\n",
+			wantStdout: "       hello\n       world\n",
 		},
 		{
 			name:       "style attached to flag (-ba)",
@@ -185,6 +188,74 @@ func TestNl(t *testing.T) {
 			args:    []string{"--nope"},
 			wantErr: true,
 		},
+		{
+			name:       "header and footer numbered separately, page resets",
+			args:       []string{"-ha", "-ba", "-fa", "sections.txt"},
+			wantStdout: "\n     1\th1\n     2\th2\n\n     1\tb1\n     2\t\n     3\tb2\n\n     1\tf1\n     2\tf2\n",
+		},
+		{
+			name:       "p flag keeps numbering across page breaks",
+			args:       []string{"-ha", "-ba", "-fa", "-p", "-v", "10", "sections.txt"},
+			wantStdout: "\n    10\th1\n    11\th2\n\n    12\tb1\n    13\t\n    14\tb2\n\n    15\tf1\n    16\tf2\n",
+		},
+		{
+			name:       "header and footer default to n",
+			args:       []string{"sections.txt"},
+			wantStdout: "\n       h1\n       h2\n\n     1\tb1\n       \n     2\tb2\n\n       f1\n       f2\n",
+		},
+		{
+			name:       "explicit -h n -b a -f n numbers only body including blanks",
+			args:       []string{"-h", "n", "-b", "a", "-f", "n", "sections.txt"},
+			wantStdout: "\n       h1\n       h2\n\n     1\tb1\n     2\t\n     3\tb2\n\n       f1\n       f2\n",
+		},
+		{
+			name:       "join blank lines with l 3",
+			args:       []string{"-ba", "-l", "3", "manyblanks.txt"},
+			wantStdout: "     1\ta\n       \n       \n     2\t\n       \n     3\tb\n       \n       \n     4\t\n       \n     5\tc\n",
+		},
+		{
+			name:       "unnumbered prefix is width plus sep length",
+			args:       []string{"-bn", "-w", "3", "-s", ": ", "hello.txt"},
+			wantStdout: "     hello\n     world\n",
+		},
+		{
+			name:       "custom delimiter",
+			args:       []string{"-d", "#@", "-ha", "-ba", "-fa", "custom.txt"},
+			wantStdout: "\n     1\th1\n\n     1\tb1\n\n     1\tf1\n",
+		},
+		{
+			name:       "single-char delim defaults second to colon",
+			args:       []string{"-d", "#", "-ha", "custom.txt"},
+			wantStdout: "     1\t#@#@#@\n     2\th1\n     3\t#@#@\n     4\tb1\n     5\t#@\n     6\tf1\n",
+		},
+		{
+			name:       "pBRE numbers only matching lines",
+			args:       []string{"-b", "pba", "hello.txt"},
+			wantStdout: "       hello\n       world\n",
+		},
+		{
+			name:       "pBRE matches",
+			args:       []string{"-b", "p^h", "hello.txt"},
+			wantStdout: "     1\thello\n       world\n",
+		},
+		{
+			name:       "invalid header style",
+			args:       []string{"-h", "x", "hello.txt"},
+			wantErrSub: "invalid header numbering style",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid footer style",
+			args:       []string{"-f", "x", "hello.txt"},
+			wantErrSub: "invalid footer numbering style",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid join blanks",
+			args:       []string{"-l", "0", "hello.txt"},
+			wantErrSub: "invalid line group size",
+			wantErr:    true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -220,5 +291,10 @@ func TestHelp(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "-b STYLE") {
 		t.Errorf("body style flag missing from help: %q", stderr)
+	}
+	for _, want := range []string{"-d CC", "-f STYLE", "-h STYLE", "-l NUMBER", "-p"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("flag %q missing from help: %q", want, stderr)
+		}
 	}
 }
