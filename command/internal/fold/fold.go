@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pborman/getopt/v2"
+	"golang.org/x/text/width"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
 )
@@ -61,8 +62,8 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		return nil
 	}
 
-	width, err := strconv.Atoi(*widthSpec)
-	if err != nil || width < 1 {
+	maxWidth, err := strconv.Atoi(*widthSpec)
+	if err != nil || maxWidth < 1 {
 		fmt.Fprintf(stderr, "fold: invalid number of columns: '%s'\n", *widthSpec)
 		return interp.ExitStatus(1)
 	}
@@ -76,7 +77,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		if err != nil {
 			return err
 		}
-		output.WriteString(processContent(content, width, *breakAtSpaces, *countBytes))
+		output.WriteString(processContent(content, maxWidth, *breakAtSpaces, *countBytes))
 	} else {
 		for _, file := range files {
 			content, err := readFile(ec, file, stderr)
@@ -84,7 +85,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 				io.WriteString(stdout, output.String())
 				return err
 			}
-			output.WriteString(processContent(content, width, *breakAtSpaces, *countBytes))
+			output.WriteString(processContent(content, maxWidth, *breakAtSpaces, *countBytes))
 		}
 	}
 
@@ -92,7 +93,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	return execErr
 }
 
-func processContent(content string, width int, breakAtSpaces, countBytes bool) string {
+func processContent(content string, maxWidth int, breakAtSpaces, countBytes bool) string {
 	if content == "" {
 		return ""
 	}
@@ -106,7 +107,7 @@ func processContent(content string, width int, breakAtSpaces, countBytes bool) s
 		if i > 0 {
 			out.WriteByte('\n')
 		}
-		out.WriteString(foldLine(line, width, breakAtSpaces, countBytes))
+		out.WriteString(foldLine(line, maxWidth, breakAtSpaces, countBytes))
 	}
 	if hasTrailingNewline {
 		out.WriteByte('\n')
@@ -114,7 +115,15 @@ func processContent(content string, width int, breakAtSpaces, countBytes bool) s
 	return out.String()
 }
 
-func foldLine(line string, width int, breakAtSpaces, countBytes bool) string {
+func runeWidth(r rune) int {
+	switch width.LookupRune(r).Kind() {
+	case width.EastAsianWide, width.EastAsianFullwidth:
+		return 2
+	}
+	return 1
+}
+
+func foldLine(line string, maxWidth int, breakAtSpaces, countBytes bool) string {
 	if line == "" {
 		return line
 	}
@@ -127,23 +136,40 @@ func foldLine(line string, width int, breakAtSpaces, countBytes bool) string {
 		lastSpaceCol  int
 	)
 
-	emit := func(charWidth int, isSpace bool, ch []byte) {
-		if currentColumn+charWidth > width && len(currentLine) > 0 {
+	flush := func() {
+		result = append(result, string(currentLine))
+		currentLine = currentLine[:0]
+		currentColumn = 0
+		lastSpace = -1
+		lastSpaceCol = 0
+	}
+
+	// emit appends ch to the current segment, folding first if needed.
+	// isTab=true means charWidth is recomputed against the current column
+	// after any fold so tab stops always land on multiples of 8.
+	emit := func(charWidth int, isSpace, isTab bool, ch []byte) {
+		if currentColumn+charWidth > maxWidth && len(currentLine) > 0 {
 			if breakAtSpaces && lastSpace >= 0 {
-				result = append(result, string(currentLine[:lastSpace+1]))
+				head := string(currentLine[:lastSpace+1])
 				rest := append([]byte(nil), currentLine[lastSpace+1:]...)
+				colAfterSpace := lastSpaceCol + 1
+				result = append(result, head)
 				currentLine = append(rest, ch...)
-				currentColumn = currentColumn - lastSpaceCol - 1 + charWidth
+				if isTab {
+					colInRest := currentColumn - colAfterSpace
+					charWidth = 8 - (colInRest % 8)
+					currentColumn = colInRest + charWidth
+				} else {
+					currentColumn = currentColumn - colAfterSpace + charWidth
+				}
 				lastSpace = -1
 				lastSpaceCol = 0
 				return
 			}
-			result = append(result, string(currentLine))
-			currentLine = append(currentLine[:0:0], ch...)
-			currentColumn = charWidth
-			lastSpace = -1
-			lastSpaceCol = 0
-			return
+			flush()
+			if isTab {
+				charWidth = 8 - (currentColumn % 8)
+			}
 		}
 		preLen := len(currentLine)
 		currentLine = append(currentLine, ch...)
@@ -157,20 +183,32 @@ func foldLine(line string, width int, breakAtSpaces, countBytes bool) string {
 	if countBytes {
 		for i := 0; i < len(line); i++ {
 			b := line[i]
-			emit(1, b == ' ' || b == '\t', []byte{b})
+			emit(1, b == ' ' || b == '\t', false, []byte{b})
 		}
 	} else {
 		var buf [utf8.UTFMax]byte
 		for _, r := range line {
-			charWidth := 1
-			switch r {
-			case '\t':
-				charWidth = 8 - (currentColumn % 8)
-			case '\b':
-				charWidth = -1
-			}
 			n := utf8.EncodeRune(buf[:], r)
-			emit(charWidth, r == ' ' || r == '\t', buf[:n])
+			ch := buf[:n]
+			switch r {
+			case '\r':
+				currentLine = append(currentLine, ch...)
+				currentColumn = 0
+				lastSpace = -1
+				lastSpaceCol = 0
+				continue
+			case '\b':
+				currentLine = append(currentLine, ch...)
+				if currentColumn > 0 {
+					currentColumn--
+				}
+				continue
+			case '\t':
+				advance := 8 - (currentColumn % 8)
+				emit(advance, true, true, ch)
+				continue
+			}
+			emit(runeWidth(r), r == ' ', false, ch)
 		}
 	}
 

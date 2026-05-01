@@ -183,6 +183,96 @@ func TestFold(t *testing.T) {
 			args:    []string{"--no-such-flag"},
 			wantErr: true,
 		},
+		{
+			name:       "carriage return resets column",
+			args:       []string{"-w", "5"},
+			stdin:      "a\rb",
+			wantStdout: "a\rb",
+		},
+		{
+			name:       "carriage return after long run resets column",
+			args:       []string{"-w", "3"},
+			stdin:      "abcd\rxy",
+			wantStdout: "abc\nd\rxy",
+		},
+		{
+			name:       "tab at column zero exceeding width folds immediately",
+			args:       []string{"-w", "4"},
+			stdin:      "\tab",
+			wantStdout: "\t\nab",
+		},
+		{
+			name:       "narrow runes count as one column each",
+			args:       []string{"-w", "3"},
+			stdin:      "λλλ",
+			wantStdout: "λλλ",
+		},
+		{
+			name:       "east asian wide runes count as two columns",
+			args:       []string{"-w", "3"},
+			stdin:      "中中中",
+			wantStdout: "中\n中\n中",
+		},
+		{
+			name:       "east asian wide rune fits exactly",
+			args:       []string{"-w", "4"},
+			stdin:      "中中",
+			wantStdout: "中中",
+		},
+		{
+			name:       "backspace decrements column",
+			args:       []string{"-w", "2"},
+			stdin:      "a\bbc",
+			wantStdout: "a\bbc",
+		},
+		{
+			name:       "byte mode treats wide rune bytes individually",
+			args:       []string{"-b", "-w", "3"},
+			stdin:      "中中",
+			wantStdout: "中\n中",
+		},
+		{
+			// After a fold, the tab's advance is recomputed against
+			// column 0 of the new segment. With width 5, a tab from
+			// column 0 still wants column 8, so it fills its own
+			// segment before the next char wraps again.
+			name:       "tab after fold recomputes width from new segment",
+			args:       []string{"-w", "5"},
+			stdin:      "aaa\tb",
+			wantStdout: "aaa\n\t\nb",
+		},
+		{
+			// With width 9 the tab should land on column 8, then fit
+			// b at column 9 without folding. This regression-checks
+			// that the tab's advance is correct when no fold occurs.
+			name:       "tab fits within width without fold",
+			args:       []string{"-w", "9"},
+			stdin:      "aaa\tb",
+			wantStdout: "aaa\tb",
+		},
+		{
+			name:       "carriage return at end of line keeps column zero",
+			args:       []string{"-w", "3"},
+			stdin:      "abc\rxyz",
+			wantStdout: "abc\rxyz",
+		},
+		{
+			// Backspace decrements the column, so col 0 + wide(2) = 2
+			// fits within width 2 without folding.
+			name:       "backspace before wide char that fits stays on line",
+			args:       []string{"-w", "2"},
+			stdin:      "a\b中",
+			wantStdout: "a\b中",
+		},
+		{
+			// Wide char after backspace exceeds width and triggers a
+			// fold, exercising the "unless the following character has
+			// a width greater than 1" rule.
+			name:       "wide char after backspace folds when too wide",
+			args:       []string{"-w", "1"},
+			stdin:      "a\b中",
+			wantStdout: "a\b\n中",
+		},
 	}
 
 	for _, tt := range tests {
