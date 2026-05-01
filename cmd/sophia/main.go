@@ -8,6 +8,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -129,12 +130,17 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 	// wazero down its non-*os.File path. That path reports stdio as
 	// FILETYPE_BLOCK_DEVICE to WASI guests and trips up wasi-libc's
 	// isatty/buffering detection in python.wasm and qjs.wasm.
-	stdinR, stdinW, err := os.Pipe()
+	//
+	// Two pipes for input: a long-lived prompt pipe that term.Terminal
+	// reads from, and a per-command pipe (rotated each sh.Run) so we can
+	// close it on Ctrl-D to deliver EOF to the foreground command without
+	// taking down the shell prompt.
+	promptR, promptW, err := os.Pipe()
 	if err != nil {
-		return fmt.Errorf("can't open stdin pipe: %w", err)
+		return fmt.Errorf("can't open prompt pipe: %w", err)
 	}
-	defer stdinR.Close()
-	defer stdinW.Close()
+	defer promptR.Close()
+	defer promptW.Close()
 
 	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
@@ -155,19 +161,38 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 	// already echoes during the prompt, so we only echo during command mode.
 	var commandActive atomic.Bool
 
-	// Pump SSH client bytes into the shared stdin pipe. Both term.Terminal
-	// (for the prompt) and running wasm commands read from stdinR; they
-	// alternate in time, so a single pump is race-free.
+	// cmdStdinW is the write end of the foreground command's stdin pipe.
+	// It rotates each sh.Run; the pump writes typed bytes here while
+	// commandActive is true, and closes it (signalling EOF to the wasm
+	// guest) when the user presses Ctrl-D.
+	var (
+		cmdMu      sync.Mutex
+		cmdStdinW  *os.File
+	)
+
+	// Pump SSH client bytes into either the prompt pipe (when idle) or the
+	// foreground command's stdin pipe (while a command runs).
 	//
-	// Two pieces of line discipline that a kernel PTY would normally do for
-	// us, done here in software:
+	// Three pieces of line discipline that a kernel PTY would normally do
+	// for us, done here in software:
 	//   - ICRNL: translate \r (the Enter key on a raw SSH channel) to \n,
 	//     so line-mode WASI readers like Python's fgets recognize Enter.
 	//     term.Terminal accepts either, so the prompt is unaffected.
 	//   - ECHO: while a command is running, echo typed bytes back to the
 	//     SSH client so REPLs (qjs, python -i) aren't typing blind.
+	//   - VEOF (Ctrl-D, 0x04): forward bytes up to the Ctrl-D and then
+	//     close the foreground command's stdin so its next fd_read returns
+	//     EOF.
 	go func() {
-		defer stdinW.Close()
+		defer promptW.Close()
+		defer func() {
+			cmdMu.Lock()
+			if cmdStdinW != nil {
+				cmdStdinW.Close()
+				cmdStdinW = nil
+			}
+			cmdMu.Unlock()
+		}()
 		buf := make([]byte, 4096)
 		for {
 			n, err := sess.Read(buf)
@@ -177,11 +202,37 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 						buf[i] = '\n'
 					}
 				}
+
 				if commandActive.Load() {
-					echoLineDiscipline(sess, buf[:n])
-				}
-				if _, werr := stdinW.Write(buf[:n]); werr != nil {
-					return
+					eofAt := -1
+					for i, b := range buf[:n] {
+						if b == 0x04 {
+							eofAt = i
+							break
+						}
+					}
+					end := n
+					if eofAt >= 0 {
+						end = eofAt
+					}
+					if end > 0 {
+						echoLineDiscipline(sess, buf[:end])
+					}
+					cmdMu.Lock()
+					if cmdStdinW != nil {
+						if end > 0 {
+							cmdStdinW.Write(buf[:end])
+						}
+						if eofAt >= 0 {
+							cmdStdinW.Close()
+							cmdStdinW = nil
+						}
+					}
+					cmdMu.Unlock()
+				} else {
+					if _, werr := promptW.Write(buf[:n]); werr != nil {
+						return
+					}
 				}
 			}
 			if err != nil {
@@ -192,7 +243,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 
 	// Drain guest stdout/stderr into the terminal, which handles \n→\r\n
 	// translation in writeWithCRLF.
-	t := term.NewTerminal(sessRW{r: stdinR, w: sess}, "$ ")
+	t := term.NewTerminal(sessRW{r: promptR, w: sess}, "$ ")
 	go io.Copy(t, stdoutR)
 	go io.Copy(t, stderrR)
 
@@ -220,7 +271,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 	sh, err = interp.New(
 		interp.Interactive(true),
 		interp.Env(env),
-		interp.StdIO(stdinR, stdoutW, stderrW),
+		interp.StdIO(nil, stdoutW, stderrW),
 		interp.ExecHandlers(middleware),
 		interp.CallHandler(billysh.CallHandler(s.reg, fsys, os.Stdout, os.Stderr)),
 		interp.StatHandler(billysh.FsysStatHandler(s.reg, fsys)),
@@ -250,9 +301,28 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 
 		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 		for _, stmt := range stmts {
+			cmdR, cmdW, perr := os.Pipe()
+			if perr != nil {
+				fmt.Fprintln(t, "stdin pipe:", perr)
+				continue
+			}
+			cmdMu.Lock()
+			cmdStdinW = cmdW
+			cmdMu.Unlock()
+			interp.StdIO(cmdR, stdoutW, stderrW)(sh)
+
 			commandActive.Store(true)
 			runErr := sh.Run(ctx, stmt)
 			commandActive.Store(false)
+
+			cmdMu.Lock()
+			if cmdStdinW != nil {
+				cmdStdinW.Close()
+				cmdStdinW = nil
+			}
+			cmdMu.Unlock()
+			cmdR.Close()
+
 			if sh.Exited() {
 				cancel()
 				return runErr
