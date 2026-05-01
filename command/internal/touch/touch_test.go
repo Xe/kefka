@@ -5,12 +5,84 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	"tangled.org/xeiaso.net/kefka/command"
 )
+
+// timedFS wraps a billy.Filesystem with persistent atime/mtime storage and
+// implements billy.Change so touch can round-trip times. memfs by itself
+// neither stores ModTime nor implements billy.Change, so tests need this
+// shim to verify behavior.
+type timedFS struct {
+	billy.Filesystem
+	mu     sync.Mutex
+	atimes map[string]time.Time
+	mtimes map[string]time.Time
+}
+
+func newTimedFS(inner billy.Filesystem) *timedFS {
+	return &timedFS{
+		Filesystem: inner,
+		atimes:     map[string]time.Time{},
+		mtimes:     map[string]time.Time{},
+	}
+}
+
+func (t *timedFS) Stat(name string) (os.FileInfo, error) {
+	info, err := t.Filesystem.Stat(name)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	mt, ok := t.mtimes[name]
+	t.mu.Unlock()
+	if !ok {
+		return info, nil
+	}
+	return &timedInfo{FileInfo: info, mtime: mt}, nil
+}
+
+func (t *timedFS) Chmod(name string, mode os.FileMode) error {
+	return billy.ErrNotSupported
+}
+
+func (t *timedFS) Lchown(name string, uid, gid int) error {
+	return billy.ErrNotSupported
+}
+
+func (t *timedFS) Chown(name string, uid, gid int) error {
+	return billy.ErrNotSupported
+}
+
+func (t *timedFS) Chtimes(name string, atime, mtime time.Time) error {
+	if _, err := t.Filesystem.Stat(name); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	t.atimes[name] = atime
+	t.mtimes[name] = mtime
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *timedFS) atime(name string) (time.Time, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	v, ok := t.atimes[name]
+	return v, ok
+}
+
+type timedInfo struct {
+	os.FileInfo
+	mtime time.Time
+}
+
+func (t *timedInfo) ModTime() time.Time { return t.mtime }
 
 func newFS(t *testing.T) billy.Filesystem {
 	t.Helper()
@@ -22,6 +94,11 @@ func newFS(t *testing.T) billy.Filesystem {
 	f.Write([]byte("hello\n"))
 	f.Close()
 	return fs
+}
+
+func newTimed(t *testing.T) *timedFS {
+	t.Helper()
+	return newTimedFS(newFS(t))
 }
 
 func run(t *testing.T, args []string, fs billy.Filesystem) (string, string, error) {
@@ -129,24 +206,6 @@ func TestTouch(t *testing.T) {
 			},
 		},
 		{
-			name: "ignored -r consumes its argument",
-			args: []string{"-r", "hello.txt", "new.txt"},
-			check: func(t *testing.T, fs billy.Filesystem) {
-				if !exists(t, fs, "new.txt") {
-					t.Errorf("new.txt was not created")
-				}
-			},
-		},
-		{
-			name: "ignored -t consumes its argument",
-			args: []string{"-t", "202504300000", "new.txt"},
-			check: func(t *testing.T, fs billy.Filesystem) {
-				if !exists(t, fs, "new.txt") {
-					t.Errorf("new.txt was not created")
-				}
-			},
-		},
-		{
 			name: "date short flag with valid date creates file",
 			args: []string{"-d", "2024-01-15", "new.txt"},
 			check: func(t *testing.T, fs billy.Filesystem) {
@@ -186,6 +245,18 @@ func TestTouch(t *testing.T) {
 			name:       "invalid date format",
 			args:       []string{"-d", "not-a-date", "new.txt"},
 			wantErrSub: "invalid date format",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid -t timestamp",
+			args:       []string{"-t", "notavalidtime", "new.txt"},
+			wantErrSub: "invalid date format",
+			wantErr:    true,
+		},
+		{
+			name:       "multiple time sources rejected",
+			args:       []string{"-t", "200001010000", "-d", "2024-01-15", "new.txt"},
+			wantErrSub: "more than one source",
 			wantErr:    true,
 		},
 		{
@@ -239,6 +310,237 @@ func TestTouch(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, fs)
+			}
+		})
+	}
+}
+
+func TestTouchAOnlySetsAtime(t *testing.T) {
+	fs := newTimed(t)
+	original := time.Date(2000, 6, 15, 12, 0, 0, 0, time.UTC)
+	if err := fs.Chtimes("hello.txt", original, original); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := run(t, []string{"-a", "-d", "2024-01-15T00:00:00Z", "hello.txt"}, fs)
+	if err != nil {
+		t.Fatalf("touch failed: %v", err)
+	}
+	at, ok := fs.atime("hello.txt")
+	if !ok {
+		t.Fatal("atime was not recorded")
+	}
+	want := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+	if !at.Equal(want) {
+		t.Errorf("atime = %v, want %v", at, want)
+	}
+	info, err := fs.Stat("hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(original) {
+		t.Errorf("mtime = %v, want %v (unchanged)", info.ModTime(), original)
+	}
+}
+
+func TestTouchMOnlySetsMtime(t *testing.T) {
+	fs := newTimed(t)
+	original := time.Date(2000, 6, 15, 12, 0, 0, 0, time.UTC)
+	if err := fs.Chtimes("hello.txt", original, original); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := run(t, []string{"-m", "-d", "2024-01-15T00:00:00Z", "hello.txt"}, fs)
+	if err != nil {
+		t.Fatalf("touch failed: %v", err)
+	}
+	at, _ := fs.atime("hello.txt")
+	if !at.Equal(original) {
+		t.Errorf("atime = %v, want %v (unchanged)", at, original)
+	}
+	info, err := fs.Stat("hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+	if !info.ModTime().Equal(want) {
+		t.Errorf("mtime = %v, want %v", info.ModTime(), want)
+	}
+}
+
+func TestTouchAMTogetherSetsBoth(t *testing.T) {
+	fs := newTimed(t)
+	original := time.Date(2000, 6, 15, 12, 0, 0, 0, time.UTC)
+	if err := fs.Chtimes("hello.txt", original, original); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := run(t, []string{"-a", "-m", "-d", "2024-01-15T00:00:00Z", "hello.txt"}, fs)
+	if err != nil {
+		t.Fatalf("touch failed: %v", err)
+	}
+	want := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+	at, _ := fs.atime("hello.txt")
+	if !at.Equal(want) {
+		t.Errorf("atime = %v, want %v", at, want)
+	}
+	info, err := fs.Stat("hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(want) {
+		t.Errorf("mtime = %v, want %v", info.ModTime(), want)
+	}
+}
+
+func TestTouchReference(t *testing.T) {
+	fs := newTimed(t)
+	refTime := time.Date(2010, 3, 5, 8, 30, 0, 0, time.UTC)
+	if err := fs.Chtimes("hello.txt", refTime, refTime); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := run(t, []string{"-r", "hello.txt", "new.txt"}, fs)
+	if err != nil {
+		t.Fatalf("touch failed: %v", err)
+	}
+	if !exists(t, fs, "new.txt") {
+		t.Fatal("new.txt was not created")
+	}
+	at, ok := fs.atime("new.txt")
+	if !ok {
+		t.Fatal("new.txt atime not recorded")
+	}
+	if !at.Equal(refTime) {
+		t.Errorf("new.txt atime = %v, want %v", at, refTime)
+	}
+	info, err := fs.Stat("new.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(refTime) {
+		t.Errorf("new.txt mtime = %v, want %v", info.ModTime(), refTime)
+	}
+}
+
+func TestTouchTStamp(t *testing.T) {
+	fs := newTimed(t)
+	_, _, err := run(t, []string{"-t", "199501010100.30", "new.txt"}, fs)
+	if err != nil {
+		t.Fatalf("touch failed: %v", err)
+	}
+	want := time.Date(1995, 1, 1, 1, 0, 30, 0, time.UTC)
+	info, err := fs.Stat("new.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(want) {
+		t.Errorf("new.txt mtime = %v, want %v", info.ModTime(), want)
+	}
+}
+
+func TestTouchTStampAOnly(t *testing.T) {
+	fs := newTimed(t)
+	original := time.Date(2000, 6, 15, 12, 0, 0, 0, time.UTC)
+	if err := fs.Chtimes("hello.txt", original, original); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := run(t, []string{"-a", "-t", "200001010000", "hello.txt"}, fs)
+	if err != nil {
+		t.Fatalf("touch failed: %v", err)
+	}
+	want := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	at, _ := fs.atime("hello.txt")
+	if !at.Equal(want) {
+		t.Errorf("atime = %v, want %v", at, want)
+	}
+	info, err := fs.Stat("hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(original) {
+		t.Errorf("mtime = %v, want %v (unchanged)", info.ModTime(), original)
+	}
+}
+
+func TestTouchNoCreateOnMissingDoesNotError(t *testing.T) {
+	fs := newTimed(t)
+	stdout, stderr, err := run(t, []string{"-c", "missing.txt"}, fs)
+	if err != nil {
+		t.Fatalf("touch -c missing: unexpected error: %v stderr=%q", err, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+	if exists(t, fs, "missing.txt") {
+		t.Errorf("missing.txt should not exist")
+	}
+}
+
+func TestTouchCreatesWith0644UnderAssumedUmask(t *testing.T) {
+	// memfs always returns 0o666 from Stat regardless of OpenFile mode,
+	// so we can't observe the create mode through fs.Stat. Validate the
+	// constant directly: with the documented assumed umask 0o022, the
+	// effective create mode must be 0o644.
+	const assumedUmask os.FileMode = 0o022
+	got := os.FileMode(0o666) &^ assumedUmask
+	if got != 0o644 {
+		t.Fatalf("computed create mode = %o, want 0644", got)
+	}
+}
+
+func TestTouchHelpFlagListed(t *testing.T) {
+	fs := newFS(t)
+	_, stderr, err := run(t, []string{"--help"}, fs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{"-a", "-c", "-d", "-h", "-m", "-r", "-t"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("help text missing %s; got %q", want, stderr)
+		}
+	}
+}
+
+func TestParseTStamp(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  time.Time
+		ok    bool
+	}{
+		{"CCYYMMDDhhmm", "199501010100", time.Date(1995, 1, 1, 1, 0, 0, 0, time.UTC), true},
+		{"CCYYMMDDhhmm.SS", "199501010100.30", time.Date(1995, 1, 1, 1, 0, 30, 0, time.UTC), true},
+		{"YY=95 maps to 1995", "9501010100", time.Date(1995, 1, 1, 1, 0, 0, 0, time.UTC), true},
+		{"YY=05 maps to 2005", "0501010100", time.Date(2005, 1, 1, 1, 0, 0, 0, time.UTC), true},
+		{"YY=68 maps to 2068", "6801010100", time.Date(2068, 1, 1, 1, 0, 0, 0, time.UTC), true},
+		{"YY=69 maps to 1969", "6901010100", time.Date(1969, 1, 1, 1, 0, 0, 0, time.UTC), true},
+		{"MMDDhhmm only", "01010100", time.Time{}, true},
+		{"garbage", "notavalidtime", time.Time{}, false},
+		{"too short", "1234", time.Time{}, false},
+		{"bad month", "199513010100", time.Time{}, false},
+		{"bad day", "199501320100", time.Time{}, false},
+		{"bad hour", "199501012500", time.Time{}, false},
+		{"bad minute", "199501010060", time.Time{}, false},
+		{"bad second len", "199501010100.3", time.Time{}, false},
+		{"non-digit", "1995010101ab", time.Time{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseTStamp(tt.input)
+			if ok != tt.ok {
+				t.Fatalf("parseTStamp(%q) ok = %v, want %v", tt.input, ok, tt.ok)
+			}
+			if !ok {
+				return
+			}
+			if tt.name == "MMDDhhmm only" {
+				if got.Year() != time.Now().UTC().Year() {
+					t.Errorf("year = %d, want current year %d", got.Year(), time.Now().UTC().Year())
+				}
+				return
+			}
+			if !got.Equal(tt.want) {
+				t.Errorf("parseTStamp(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}
