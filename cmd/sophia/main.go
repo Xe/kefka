@@ -100,7 +100,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 	if _, err := client.CreateBucketFork(sess.Context(), *bucket, sessBucket); err != nil {
 		return fmt.Errorf("can't create per-session bucket fork: %w", err)
 	}
-	lg.Info("made bucket fork", "source", *bucket, "dest", sessBucket)
+	lg.Info("made bucket fork", "source", *bucket)
 
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -115,6 +115,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 		}, withForce); err != nil {
 			lg.Error("can't delete session bucket", "err", err)
 		}
+		lg.Info("cleaned up bucket")
 	}()
 
 	fsys, err := s3fs.NewS3FS(client.Client, sessBucket)
