@@ -8,8 +8,11 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/pborman/getopt/v2"
+	"golang.org/x/text/width"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
 )
@@ -17,9 +20,11 @@ import (
 type Impl struct{}
 
 type stats struct {
-	lines int
-	words int
-	chars int
+	lines   int
+	words   int
+	chars   int
+	bytes   int
+	maxLine int
 }
 
 type fileResult struct {
@@ -48,11 +53,12 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	usage := func() {
 		fmt.Fprint(stderr, "Usage: wc [OPTION]... [FILE]...\n")
 		fmt.Fprint(stderr, "Print newline, word, and byte counts for each FILE.\n\n")
-		fmt.Fprint(stderr, "  -c, --bytes      print the byte counts\n")
-		fmt.Fprint(stderr, "  -m, --chars      print the character counts\n")
-		fmt.Fprint(stderr, "  -l, --lines      print the newline counts\n")
-		fmt.Fprint(stderr, "  -w, --words      print the word counts\n")
-		fmt.Fprint(stderr, "      --help       display this help and exit\n")
+		fmt.Fprint(stderr, "  -c, --bytes              print the byte counts\n")
+		fmt.Fprint(stderr, "  -m, --chars              print the character counts\n")
+		fmt.Fprint(stderr, "  -l, --lines              print the newline counts\n")
+		fmt.Fprint(stderr, "  -w, --words              print the word counts\n")
+		fmt.Fprint(stderr, "  -L, --max-line-length    print the maximum display width\n")
+		fmt.Fprint(stderr, "      --help               display this help and exit\n")
 	}
 	set.SetUsage(usage)
 
@@ -60,6 +66,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	wordsFlag := set.BoolLong("words", 'w', "print the word counts")
 	bytesFlag := set.BoolLong("bytes", 'c', "print the byte counts")
 	charsFlag := set.BoolLong("chars", 'm', "print the character counts")
+	maxLineFlag := set.BoolLong("max-line-length", 'L', "print the maximum display width")
 	helpFlag := set.BoolLong("help", 0, "display this help and exit")
 
 	if err := set.Getopt(append([]string{"wc"}, args...), nil); err != nil {
@@ -75,12 +82,14 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 
 	showLines := *linesFlag
 	showWords := *wordsFlag
-	showChars := *bytesFlag || *charsFlag
+	showBytes := *bytesFlag
+	showChars := *charsFlag
+	showMaxLine := *maxLineFlag
 
-	if !showLines && !showWords && !showChars {
+	if !showLines && !showWords && !showBytes && !showChars && !showMaxLine {
 		showLines = true
 		showWords = true
-		showChars = true
+		showBytes = true
 	}
 
 	files := set.Args()
@@ -92,7 +101,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 			return interp.ExitStatus(1)
 		}
 		s := countStats(data)
-		io.WriteString(stdout, formatStats(s, showLines, showWords, showChars, "", 0)+"\n")
+		io.WriteString(stdout, formatStats(s, showLines, showWords, showChars, showBytes, showMaxLine, "", 0)+"\n")
 		return nil
 	}
 
@@ -103,7 +112,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	for _, file := range files {
 		data, err := readFile(ec, file)
 		if err != nil {
-			fmt.Fprintf(stderr, "wc: %s: No such file or directory\n", file)
+			fmt.Fprintf(stderr, "wc: %s: %s\n", file, err)
 			exitCode = 1
 			continue
 		}
@@ -111,16 +120,24 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		total.lines += s.lines
 		total.words += s.words
 		total.chars += s.chars
+		total.bytes += s.bytes
+		if s.maxLine > total.maxLine {
+			total.maxLine = s.maxLine
+		}
 		results = append(results, fileResult{filename: file, stats: s})
 	}
 
 	maxLines := 0
 	maxWords := 0
 	maxChars := 0
+	maxBytes := 0
+	maxL := 0
 	if len(files) > 1 {
 		maxLines = total.lines
 		maxWords = total.words
 		maxChars = total.chars
+		maxBytes = total.bytes
+		maxL = total.maxLine
 	} else {
 		for _, r := range results {
 			if r.stats.lines > maxLines {
@@ -131,6 +148,12 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 			}
 			if r.stats.chars > maxChars {
 				maxChars = r.stats.chars
+			}
+			if r.stats.bytes > maxBytes {
+				maxBytes = r.stats.bytes
+			}
+			if r.stats.maxLine > maxL {
+				maxL = r.stats.maxLine
 			}
 		}
 	}
@@ -154,15 +177,25 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 			maxWidth = w
 		}
 	}
+	if showBytes {
+		if w := len(strconv.Itoa(maxBytes)); w > maxWidth {
+			maxWidth = w
+		}
+	}
+	if showMaxLine {
+		if w := len(strconv.Itoa(maxL)); w > maxWidth {
+			maxWidth = w
+		}
+	}
 
 	var out strings.Builder
 	for _, r := range results {
-		out.WriteString(formatStats(r.stats, showLines, showWords, showChars, r.filename, maxWidth))
+		out.WriteString(formatStats(r.stats, showLines, showWords, showChars, showBytes, showMaxLine, r.filename, maxWidth))
 		out.WriteByte('\n')
 	}
 
 	if len(files) > 1 {
-		out.WriteString(formatStats(total, showLines, showWords, showChars, "total", maxWidth))
+		out.WriteString(formatStats(total, showLines, showWords, showChars, showBytes, showMaxLine, "total", maxWidth))
 		out.WriteByte('\n')
 	}
 
@@ -198,32 +231,76 @@ func readFile(ec *command.ExecContext, name string) ([]byte, error) {
 
 func countStats(content []byte) stats {
 	var s stats
-	s.chars = len(content)
+	s.bytes = len(content)
+	s.chars = utf8.RuneCount(content)
+
 	inWord := false
-	for _, c := range content {
-		switch c {
+	col := 0
+	lineMax := 0
+	for _, r := range string(content) {
+		switch r {
 		case '\n':
 			s.lines++
-			if inWord {
-				s.words++
-				inWord = false
+			if col > lineMax {
+				lineMax = col
 			}
-		case ' ', '\t', '\r':
-			if inWord {
-				s.words++
-				inWord = false
+			if lineMax > s.maxLine {
+				s.maxLine = lineMax
+			}
+			lineMax = 0
+			col = 0
+		case '\r':
+			if col > lineMax {
+				lineMax = col
+			}
+			col = 0
+		case '\t':
+			col = (col/8 + 1) * 8
+		case '\b':
+			if col > 0 {
+				col--
 			}
 		default:
+			col += runeWidth(r)
+		}
+
+		if unicode.IsSpace(r) {
+			if inWord {
+				s.words++
+				inWord = false
+			}
+		} else {
 			inWord = true
 		}
 	}
 	if inWord {
 		s.words++
 	}
+	if col > lineMax {
+		lineMax = col
+	}
+	if lineMax > s.maxLine {
+		s.maxLine = lineMax
+	}
 	return s
 }
 
-func formatStats(s stats, showLines, showWords, showChars bool, filename string, minWidth int) string {
+// runeWidth returns the display width of r in fixed-width cells, mirroring the
+// behaviour wc uses when computing -L: control characters contribute zero,
+// East Asian Wide / Fullwidth runes contribute two, and everything else
+// contributes one.
+func runeWidth(r rune) int {
+	if r < 0x20 || r == 0x7f {
+		return 0
+	}
+	switch width.LookupRune(r).Kind() {
+	case width.EastAsianWide, width.EastAsianFullwidth:
+		return 2
+	}
+	return 1
+}
+
+func formatStats(s stats, showLines, showWords, showChars, showBytes, showMaxLine bool, filename string, minWidth int) string {
 	var values []string
 	if showLines {
 		values = append(values, padLeft(strconv.Itoa(s.lines), minWidth))
@@ -233,6 +310,12 @@ func formatStats(s stats, showLines, showWords, showChars bool, filename string,
 	}
 	if showChars {
 		values = append(values, padLeft(strconv.Itoa(s.chars), minWidth))
+	}
+	if showBytes {
+		values = append(values, padLeft(strconv.Itoa(s.bytes), minWidth))
+	}
+	if showMaxLine {
+		values = append(values, padLeft(strconv.Itoa(s.maxLine), minWidth))
 	}
 	result := strings.Join(values, " ")
 	if filename != "" {

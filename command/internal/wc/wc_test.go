@@ -100,10 +100,34 @@ func TestWc(t *testing.T) {
 			wantStdout: "5\n",
 		},
 		{
-			name:       "chars flag treats bytes the same as -c",
+			name:       "chars flag on ASCII matches byte count",
 			args:       []string{"-m"},
 			stdin:      "abcde",
 			wantStdout: "5\n",
+		},
+		{
+			name:       "chars flag counts runes for multibyte input",
+			args:       []string{"-m"},
+			stdin:      "λλλ",
+			wantStdout: "3\n",
+		},
+		{
+			name:       "bytes flag counts bytes for multibyte input",
+			args:       []string{"-c"},
+			stdin:      "λλλ",
+			wantStdout: "6\n",
+		},
+		{
+			name:       "bytes and chars together show both columns",
+			args:       []string{"-c", "-m"},
+			stdin:      "λλλ",
+			wantStdout: "3 6\n",
+		},
+		{
+			name:       "lines words chars bytes ordering",
+			args:       []string{"-lwmc"},
+			stdin:      "λλλ\n",
+			wantStdout: "1 1 4 7\n",
 		},
 		{
 			name:       "long lines flag",
@@ -124,6 +148,76 @@ func TestWc(t *testing.T) {
 			wantStdout: "4\n",
 		},
 		{
+			name:       "nbsp splits words",
+			args:       []string{"-w"},
+			stdin:      "alpha beta gamma",
+			wantStdout: "3\n",
+		},
+		{
+			name:       "ascii word splitting unchanged",
+			args:       []string{"-w"},
+			stdin:      "  one two\tthree\nfour  ",
+			wantStdout: "4\n",
+		},
+		{
+			name:       "max line length flag",
+			args:       []string{"-L"},
+			stdin:      "short\nverylonger\nmid\n",
+			wantStdout: "10\n",
+		},
+		{
+			name:       "max line length long form",
+			args:       []string{"--max-line-length"},
+			stdin:      "abc\ndefgh\n",
+			wantStdout: "5\n",
+		},
+		{
+			name:       "max line length expands tabs to next stop",
+			args:       []string{"-L"},
+			stdin:      "a\tb\n",
+			wantStdout: "9\n",
+		},
+		{
+			name:       "max line length counts wide chars as width 2",
+			args:       []string{"-L"},
+			stdin:      "日本\n",
+			wantStdout: "4\n",
+		},
+		{
+			name:       "max line length combines with other flags in fixed order",
+			args:       []string{"-lwL"},
+			stdin:      "abc def\nhi\n",
+			wantStdout: "2 3 7\n",
+		},
+		{
+			name:       "max line length on file shows length",
+			args:       []string{"-L", "multi.txt"},
+			stdin:      "",
+			wantStdout: "13 multi.txt\n",
+		},
+		{
+			name:       "max line length multi-file uses max not sum",
+			args:       []string{"-L", "hello.txt", "multi.txt"},
+			wantStdout: " 11 hello.txt\n 13 multi.txt\n 13 total\n",
+		},
+		{
+			name:       "no trailing newline reports zero lines",
+			args:       []string{"-l"},
+			stdin:      "no newline here",
+			wantStdout: "0\n",
+		},
+		{
+			name:       "single line with trailing newline reports one line",
+			args:       []string{"-l"},
+			stdin:      "with newline\n",
+			wantStdout: "1\n",
+		},
+		{
+			name:       "no trailing newline file reports zero lines",
+			args:       []string{"-l", "nolf.txt"},
+			wantStdout: "0 nolf.txt\n",
+		},
+		{
 			name:       "multi file totals",
 			args:       []string{"hello.txt", "multi.txt"},
 			wantStdout: "  1   2  12 hello.txt\n  3   6  28 multi.txt\n  4   8  40 total\n",
@@ -137,14 +231,14 @@ func TestWc(t *testing.T) {
 			name:       "missing file reports error",
 			args:       []string{"nope.txt"},
 			wantStdout: "",
-			wantErrSub: "wc: nope.txt: No such file or directory",
+			wantErrSub: "wc: nope.txt: ",
 			wantErr:    true,
 		},
 		{
 			name:       "missing file in list still counts present files",
 			args:       []string{"hello.txt", "nope.txt"},
 			wantStdout: "  1   2  12 hello.txt\n  1   2  12 total\n",
-			wantErrSub: "wc: nope.txt: No such file or directory",
+			wantErrSub: "wc: nope.txt: ",
 			wantErr:    true,
 		},
 		{
@@ -171,6 +265,23 @@ func TestWc(t *testing.T) {
 				t.Errorf("stderr = %q, want substring %q", stderr, tt.wantErrSub)
 			}
 		})
+	}
+}
+
+func TestMissingFileDiagnosticSurfacesErrno(t *testing.T) {
+	_, stderr, err := run(t, []string{"nope.txt"}, "", newFS(t))
+	if err == nil {
+		t.Fatalf("expected error, got nil; stderr=%q", stderr)
+	}
+	if !strings.HasPrefix(stderr, "wc: nope.txt: ") {
+		t.Errorf("stderr should start with %q, got %q", "wc: nope.txt: ", stderr)
+	}
+	if strings.Contains(stderr, "No such file or directory") {
+		t.Errorf("stderr should not hardcode 'No such file or directory'; got %q", stderr)
+	}
+	suffix := strings.TrimPrefix(strings.TrimRight(stderr, "\n"), "wc: nope.txt: ")
+	if suffix == "" {
+		t.Errorf("expected an underlying error message after %q, got %q", "wc: nope.txt: ", stderr)
 	}
 }
 
@@ -205,14 +316,19 @@ func TestCountStats(t *testing.T) {
 		input string
 		want  stats
 	}{
-		{"empty", "", stats{lines: 0, words: 0, chars: 0}},
-		{"single word no newline", "hello", stats{lines: 0, words: 1, chars: 5}},
-		{"single line with newline", "hello\n", stats{lines: 1, words: 1, chars: 6}},
-		{"multiple words", "a b c", stats{lines: 0, words: 3, chars: 5}},
-		{"tab separated", "a\tb\tc", stats{lines: 0, words: 3, chars: 5}},
-		{"mixed whitespace", "  a  b  ", stats{lines: 0, words: 2, chars: 8}},
-		{"three lines", "one\ntwo\nthree\n", stats{lines: 3, words: 3, chars: 14}},
-		{"only newlines", "\n\n\n", stats{lines: 3, words: 0, chars: 3}},
+		{"empty", "", stats{}},
+		{"single word no newline", "hello", stats{lines: 0, words: 1, chars: 5, bytes: 5, maxLine: 5}},
+		{"single line with newline", "hello\n", stats{lines: 1, words: 1, chars: 6, bytes: 6, maxLine: 5}},
+		{"multiple words", "a b c", stats{lines: 0, words: 3, chars: 5, bytes: 5, maxLine: 5}},
+		{"tab separated", "a\tb\tc", stats{lines: 0, words: 3, chars: 5, bytes: 5, maxLine: 17}},
+		{"mixed whitespace", "  a  b  ", stats{lines: 0, words: 2, chars: 8, bytes: 8, maxLine: 8}},
+		{"three lines", "one\ntwo\nthree\n", stats{lines: 3, words: 3, chars: 14, bytes: 14, maxLine: 5}},
+		{"only newlines", "\n\n\n", stats{lines: 3, words: 0, chars: 3, bytes: 3, maxLine: 0}},
+		{"multibyte chars vs bytes", "λλλ", stats{lines: 0, words: 1, chars: 3, bytes: 6, maxLine: 3}},
+		{"nbsp word separator", "a b", stats{lines: 0, words: 2, chars: 3, bytes: 4, maxLine: 3}},
+		{"cr resets column", "aa\rbbbbb\n", stats{lines: 1, words: 2, chars: 9, bytes: 9, maxLine: 5}},
+		{"east asian wide width", "日本\n", stats{lines: 1, words: 1, chars: 3, bytes: 7, maxLine: 4}},
+		{"tab to column 9 with letter", "a\tb\n", stats{lines: 1, words: 2, chars: 4, bytes: 4, maxLine: 9}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
