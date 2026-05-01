@@ -3,6 +3,7 @@ package uniq
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -148,9 +149,94 @@ func TestUniq(t *testing.T) {
 			wantStdout: "   2 a\n   3 c\n",
 		},
 		{
-			name:       "concatenates multiple file arguments",
-			args:       []string{"part1.txt", "part2.txt"},
-			wantStdout: "x\ny\n",
+			name:       "skip-fields collapses lines with same suffix",
+			args:       []string{"-f", "1"},
+			stdin:      "x foo\ny foo\n",
+			wantStdout: "x foo\n",
+		},
+		{
+			name:       "skip-fields keeps lines with differing suffix",
+			args:       []string{"-f", "1"},
+			stdin:      "a x\na y\n",
+			wantStdout: "a x\na y\n",
+		},
+		{
+			name:       "skip-fields multiple fields",
+			args:       []string{"-f", "2"},
+			stdin:      "a a foo\nb b foo\n",
+			wantStdout: "a a foo\n",
+		},
+		{
+			name:       "skip-fields beyond available collapses",
+			args:       []string{"-f", "1"},
+			stdin:      "foo\nbar\n",
+			wantStdout: "foo\n",
+		},
+		{
+			name:       "skip-fields long flag",
+			args:       []string{"--skip-fields=1"},
+			stdin:      "x foo\ny foo\n",
+			wantStdout: "x foo\n",
+		},
+		{
+			name:       "skip-chars collapses with same suffix",
+			args:       []string{"-s", "2"},
+			stdin:      "AAfoo\nBBfoo\n",
+			wantStdout: "AAfoo\n",
+		},
+		{
+			name:       "skip-chars keeps differing suffix",
+			args:       []string{"-s", "2"},
+			stdin:      "aabar\naabaz\n",
+			wantStdout: "aabar\naabaz\n",
+		},
+		{
+			name:       "skip-chars long flag",
+			args:       []string{"--skip-chars=2"},
+			stdin:      "AAfoo\nBBfoo\n",
+			wantStdout: "AAfoo\n",
+		},
+		{
+			name:       "skip-fields combined with skip-chars",
+			args:       []string{"-f", "1", "-s", "1"},
+			stdin:      "aa Xfoo\nbb Xfoo\n",
+			wantStdout: "aa Xfoo\n",
+		},
+		{
+			name:       "check-chars limits comparison length",
+			args:       []string{"-w", "3"},
+			stdin:      "fooaaa\nfoobbb\nbarccc\n",
+			wantStdout: "fooaaa\nbarccc\n",
+		},
+		{
+			name:       "check-chars zero collapses everything",
+			args:       []string{"-w", "0"},
+			stdin:      "abc\ndef\nghi\n",
+			wantStdout: "abc\n",
+		},
+		{
+			name:       "check-chars long flag",
+			args:       []string{"--check-chars=2"},
+			stdin:      "abxxx\nabyyy\nczzzz\n",
+			wantStdout: "abxxx\nczzzz\n",
+		},
+		{
+			name:       "check-chars exceeding line length keeps distinct",
+			args:       []string{"-w", "10"},
+			stdin:      "ab\nac\n",
+			wantStdout: "ab\nac\n",
+		},
+		{
+			name:       "skip-fields skip-chars and check-chars combined",
+			args:       []string{"-f", "1", "-s", "1", "-w", "3"},
+			stdin:      "a Xfoozzz\nb Xfooqqq\nc Xbarppp\n",
+			wantStdout: "a Xfoozzz\nc Xbarppp\n",
+		},
+		{
+			name:       "check-chars with ignore-case",
+			args:       []string{"-w", "3", "-i"},
+			stdin:      "FOOaaa\nfooBBB\n",
+			wantStdout: "FOOaaa\n",
 		},
 		{
 			name:       "missing file reports error",
@@ -186,6 +272,68 @@ func TestUniq(t *testing.T) {
 	}
 }
 
+func TestOutputFile(t *testing.T) {
+	t.Run("two positionals writes file", func(t *testing.T) {
+		fs := newFS(t)
+		stdout, stderr, err := run(t, []string{"dups.txt", "out.txt"}, "", fs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v; stderr=%q", err, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("expected empty stdout, got %q", stdout)
+		}
+		f, err := fs.Open("out.txt")
+		if err != nil {
+			t.Fatalf("output file not created: %v", err)
+		}
+		defer f.Close()
+		got, err := io.ReadAll(f)
+		if err != nil {
+			t.Fatalf("read output: %v", err)
+		}
+		want := "a\nb\nc\nd\n"
+		if string(got) != want {
+			t.Errorf("output mismatch\n got: %q\nwant: %q", string(got), want)
+		}
+	})
+
+	t.Run("stdin to file via dash", func(t *testing.T) {
+		fs := newFS(t)
+		stdout, stderr, err := run(t, []string{"-", "out.txt"}, "x\nx\ny\n", fs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v; stderr=%q", err, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("expected empty stdout, got %q", stdout)
+		}
+		f, err := fs.Open("out.txt")
+		if err != nil {
+			t.Fatalf("output file not created: %v", err)
+		}
+		defer f.Close()
+		got, err := io.ReadAll(f)
+		if err != nil {
+			t.Fatalf("read output: %v", err)
+		}
+		want := "x\ny\n"
+		if string(got) != want {
+			t.Errorf("output mismatch\n got: %q\nwant: %q", string(got), want)
+		}
+	})
+
+	t.Run("output dash writes stdout", func(t *testing.T) {
+		fs := newFS(t)
+		stdout, stderr, err := run(t, []string{"dups.txt", "-"}, "", fs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v; stderr=%q", err, stderr)
+		}
+		want := "a\nb\nc\nd\n"
+		if stdout != want {
+			t.Errorf("stdout mismatch\n got: %q\nwant: %q", stdout, want)
+		}
+	})
+}
+
 func TestHelp(t *testing.T) {
 	stdout, stderr, err := run(t, []string{"--help"}, "", newFS(t))
 	if err != nil {
@@ -202,5 +350,14 @@ func TestHelp(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "-i, --ignore-case") {
 		t.Errorf("ignore-case flag missing from help: %q", stderr)
+	}
+	if !strings.Contains(stderr, "-f, --skip-fields") {
+		t.Errorf("skip-fields flag missing from help: %q", stderr)
+	}
+	if !strings.Contains(stderr, "-s, --skip-chars") {
+		t.Errorf("skip-chars flag missing from help: %q", stderr)
+	}
+	if !strings.Contains(stderr, "-w, --check-chars") {
+		t.Errorf("check-chars flag missing from help: %q", stderr)
 	}
 }
