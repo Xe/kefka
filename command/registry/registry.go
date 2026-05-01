@@ -103,6 +103,9 @@ func (i *Impl) Exec(ctx context.Context, fsys billy.Filesystem, runner *interp.R
 
 	cmd, ok := i.Get(cmdName)
 	if !ok {
+		if hc.Stderr != nil {
+			fmt.Fprintf(hc.Stderr, "kefka: command not found: %s\n", cmdName)
+		}
 		return errors.Join(fmt.Errorf("%w: %s", ErrCommandNotFound, cmdName), interp.ExitStatus(127))
 	}
 
