@@ -111,9 +111,11 @@ parseLoop:
 
 	commandArgs := args[i:]
 
-	// No command specified — return success silently (matches GNU time).
+	// No command specified — print usage and exit non-zero, matching
+	// GNU /usr/bin/time which errors out with "Usage: ..." in this case.
 	if len(commandArgs) == 0 {
-		return nil
+		usage()
+		return interp.ExitStatus(1)
 	}
 
 	displayCommand := strings.Join(commandArgs, " ")

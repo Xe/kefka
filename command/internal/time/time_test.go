@@ -36,6 +36,20 @@ func (failImpl) Exec(ctx context.Context, ec *command.ExecContext, args []string
 	return interp.ExitStatus(3)
 }
 
+// trueImpl always succeeds (mirrors GNU `true`).
+type trueImpl struct{}
+
+func (trueImpl) Exec(ctx context.Context, ec *command.ExecContext, args []string) error {
+	return nil
+}
+
+// falseImpl always exits with status 1 (mirrors GNU `false`).
+type falseImpl struct{}
+
+func (falseImpl) Exec(ctx context.Context, ec *command.ExecContext, args []string) error {
+	return interp.ExitStatus(1)
+}
+
 // stdinEchoImpl reads from stdin and writes it to stdout, used to verify
 // time passes the outer stdin through to the inner command.
 type stdinEchoImpl struct{}
@@ -58,6 +72,8 @@ func newRegistry(t *testing.T) *registry.Impl {
 	reg.Register("echo", echoImpl{})
 	reg.Register("fail", failImpl{})
 	reg.Register("stdin-echo", stdinEchoImpl{})
+	reg.Register("true", trueImpl{})
+	reg.Register("false", falseImpl{})
 	return reg
 }
 
@@ -95,14 +111,75 @@ func run(t *testing.T, args []string, opts ...func(*command.ExecContext)) runRes
 
 func TestTime_NoCommand(t *testing.T) {
 	r := run(t, nil)
-	if r.err != nil {
-		t.Fatalf("unexpected error: %v", r.err)
+	var status interp.ExitStatus
+	if !errors.As(r.err, &status) || uint8(status) != 1 {
+		t.Errorf("err = %v, want ExitStatus(1)", r.err)
 	}
 	if r.stdout != "" {
 		t.Errorf("stdout = %q, want empty", r.stdout)
 	}
-	if r.stderr != "" {
-		t.Errorf("stderr = %q, want empty", r.stderr)
+	if !strings.Contains(r.stderr, "Usage: time") {
+		t.Errorf("stderr missing usage; got: %q", r.stderr)
+	}
+}
+
+func TestTime_True(t *testing.T) {
+	// `time true` succeeds (exit 0) and writes timing info to stderr.
+	r := run(t, []string{"true"})
+	if r.err != nil {
+		t.Fatalf("unexpected error: %v", r.err)
+	}
+	if r.stderr == "" {
+		t.Errorf("expected timing on stderr, got empty")
+	}
+}
+
+func TestTime_False(t *testing.T) {
+	// `time false` propagates the inner exit status of 1.
+	r := run(t, []string{"false"})
+	var status interp.ExitStatus
+	if !errors.As(r.err, &status) || uint8(status) != 1 {
+		t.Errorf("err = %v, want ExitStatus(1)", r.err)
+	}
+	if r.stderr == "" {
+		t.Errorf("expected timing on stderr even when inner command fails")
+	}
+}
+
+func TestTime_PortableFormat_True(t *testing.T) {
+	// `time -p true` emits the three-line POSIX portable format on stderr.
+	r := run(t, []string{"-p", "true"})
+	if r.err != nil {
+		t.Fatalf("unexpected error: %v", r.err)
+	}
+	lines := strings.Split(strings.TrimRight(r.stderr, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d: %q", len(lines), r.stderr)
+	}
+	if !strings.HasPrefix(lines[0], "real ") {
+		t.Errorf("line 0 = %q, want prefix %q", lines[0], "real ")
+	}
+	if !strings.HasPrefix(lines[1], "user ") {
+		t.Errorf("line 1 = %q, want prefix %q", lines[1], "user ")
+	}
+	if !strings.HasPrefix(lines[2], "sys ") {
+		t.Errorf("line 2 = %q, want prefix %q", lines[2], "sys ")
+	}
+}
+
+func TestTime_FormatElapsedFlag(t *testing.T) {
+	// `time -f '%e' true` writes only the elapsed-time substitution.
+	r := run(t, []string{"-f", "%e", "true"})
+	if r.err != nil {
+		t.Fatalf("unexpected error: %v", r.err)
+	}
+	got := strings.TrimRight(r.stderr, "\n")
+	// %e expands to "%.2f" — verify a simple decimal pattern.
+	if got == "" {
+		t.Fatalf("stderr empty, want elapsed time")
+	}
+	if !strings.Contains(got, ".") {
+		t.Errorf("stderr = %q, want decimal elapsed time", got)
 	}
 }
 
