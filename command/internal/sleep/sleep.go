@@ -16,6 +16,16 @@ import (
 
 type Impl struct{}
 
+// maxSleep caps every sleep invocation at one hour. This is a kefka
+// sandbox invariant: kefka runs untrusted scripts inside short-lived
+// agent sessions, so a script that calls `sleep 99999999` (or `sleep 1y`
+// equivalent) must not be able to wedge the harness for hours or days.
+//
+// GNU coreutils and POSIX both allow much larger durations (POSIX
+// RATIONALE requires implementations to accept up to ~68 years), so
+// this is a deliberate deviation. See docs/posix2018/CONFORMANCE.md
+// "### `sleep`" for the design rationale. Do not remove without
+// updating that document.
 const maxSleep = time.Hour
 
 var durationRe = regexp.MustCompile(`^(\d+\.?\d*)(s|m|h|d)?$`)

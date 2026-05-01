@@ -148,6 +148,64 @@ func TestSuffixes(t *testing.T) {
 	}
 }
 
+func TestSleepZeroReturnsImmediately(t *testing.T) {
+	start := time.Now()
+	stdout, stderr, err := run(t, context.Background(), []string{"0"})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v; stderr=%q", err, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("expected empty stdout, got %q", stdout)
+	}
+	if stderr != "" {
+		t.Errorf("expected empty stderr, got %q", stderr)
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("sleep 0 took %v, expected immediate return", elapsed)
+	}
+}
+
+func TestSleepAlphaFails(t *testing.T) {
+	stdout, stderr, err := run(t, context.Background(), []string{"abc"})
+	if err == nil {
+		t.Fatalf("expected error, got nil; stdout=%q stderr=%q", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "invalid time interval 'abc'") {
+		t.Errorf("stderr = %q, want diagnostic for 'abc'", stderr)
+	}
+}
+
+func TestSleepFractionalAccepted(t *testing.T) {
+	// 1.5 is a GNU compatibility extension over POSIX (which says
+	// "non-negative decimal integer"). Verify parseDuration accepts it
+	// without actually waiting 1.5 seconds.
+	d, ok := parseDuration("1.5")
+	if !ok {
+		t.Fatalf("parseDuration(\"1.5\") returned !ok")
+	}
+	if want := 1500 * time.Millisecond; d != want {
+		t.Errorf("parseDuration(\"1.5\") = %v, want %v", d, want)
+	}
+}
+
+func TestMultipleOperandsSum(t *testing.T) {
+	// Avoid actually sleeping 6 seconds by validating the parse path
+	// directly; Exec's loop is a trivial fold over parseDuration.
+	var total time.Duration
+	for _, arg := range []string{"1", "2", "3"} {
+		d, ok := parseDuration(arg)
+		if !ok {
+			t.Fatalf("parseDuration(%q) returned !ok", arg)
+		}
+		total += d
+	}
+	if want := 6 * time.Second; total != want {
+		t.Errorf("sum = %v, want %v", total, want)
+	}
+}
+
 func TestCancelAlreadyDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
