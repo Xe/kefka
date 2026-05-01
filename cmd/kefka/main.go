@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 	"tangled.org/xeiaso.net/kefka/command/registry"
@@ -54,9 +55,23 @@ func run(ctx context.Context) error {
 		}
 	}
 
+	env := expand.ListEnviron(
+		"HOME=/",
+		"IFS=\n",
+		"MACHTYPE=x86_64-pc-linux-gnu",
+		"HOSTTYPE=x86_64",
+		"HOSTNAME=localhost",
+		"PWD=/",
+		"OLDPWD=/",
+		"OPTIND=1",
+		"KEFKA=1",
+		"PATH=/usr/bin:/bin",
+	)
+
 	var err error
 	sh, err = interp.New(
 		interp.Interactive(true),
+		interp.Env(env),
 		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 		interp.ExecHandlers(middleware),
 		interp.CallHandler(callHandler(reg, fsys, os.Stdout, os.Stderr)),
