@@ -37,11 +37,13 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		fmt.Fprint(stderr, "Usage: cat [OPTION]... [FILE]...\n")
 		fmt.Fprint(stderr, "Concatenate FILE(s) to standard output.\n\n")
 		fmt.Fprint(stderr, "  -n, --number      number all output lines\n")
+		fmt.Fprint(stderr, "  -u                (ignored; Go writes are unbuffered)\n")
 		fmt.Fprint(stderr, "      --help        display this help and exit\n")
 	}
 	set.SetUsage(usage)
 
 	number := set.BoolLong("number", 'n', "number all output lines")
+	_ = set.Bool('u', "(ignored; Go writes are unbuffered)")
 	help := set.BoolLong("help", 0, "display this help and exit")
 
 	if err := set.Getopt(append([]string{"cat"}, args...), nil); err != nil {
@@ -91,13 +93,14 @@ func readOne(ec *command.ExecContext, file string, stderr io.Writer) ([]byte, er
 		return io.ReadAll(ec.Stdin)
 	}
 	if ec.FS == nil {
-		fmt.Fprintf(stderr, "cat: %s: No such file or directory\n", file)
-		return nil, errors.New("no filesystem")
+		err := errors.New("no filesystem")
+		fmt.Fprintf(stderr, "cat: %s: %s\n", file, err)
+		return nil, err
 	}
 	full := resolvePath(ec, file)
 	f, err := ec.FS.Open(full)
 	if err != nil {
-		fmt.Fprintf(stderr, "cat: %s: No such file or directory\n", file)
+		fmt.Fprintf(stderr, "cat: %s: %s\n", file, err)
 		return nil, err
 	}
 	defer f.Close()

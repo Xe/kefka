@@ -27,6 +27,10 @@ func newFS(t *testing.T) billy.Filesystem {
 	write("two.txt", []byte("world\n"))
 	write("noeol.txt", []byte("noeol"))
 	write("multi.txt", []byte("one\ntwo\nthree\n"))
+	write("-file", []byte("dashfile\n"))
+	if err := fs.MkdirAll("subdir", 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return fs
 }
 
@@ -122,13 +126,29 @@ func TestCat(t *testing.T) {
 			name:       "missing file reports error and continues",
 			args:       []string{"nope.txt", "hello.txt"},
 			wantStdout: "hello\n",
-			wantErrSub: "No such file or directory",
+			wantErrSub: "cat: nope.txt:",
 			wantErr:    true,
 		},
 		{
 			name:       "double dash terminator",
 			args:       []string{"--", "hello.txt"},
 			wantStdout: "hello\n",
+		},
+		{
+			name:       "double dash allows dash-prefixed filename",
+			args:       []string{"--", "-file"},
+			wantStdout: "dashfile\n",
+		},
+		{
+			name:       "u flag accepted as no-op",
+			args:       []string{"-u", "hello.txt"},
+			wantStdout: "hello\n",
+		},
+		{
+			name:       "two dashes consume stdin once",
+			args:       []string{"-", "-"},
+			stdin:      "foo",
+			wantStdout: "foo",
 		},
 		{
 			name:    "unknown flag",
@@ -154,6 +174,22 @@ func TestCat(t *testing.T) {
 				t.Errorf("stderr = %q, want substring %q", stderr, tt.wantErrSub)
 			}
 		})
+	}
+}
+
+func TestCatDirectoryDiagnostic(t *testing.T) {
+	stdout, stderr, err := run(t, []string{"subdir"}, "", newFS(t))
+	if err == nil {
+		t.Fatalf("expected error, got nil; stdout=%q stderr=%q", stdout, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("expected empty stdout, got %q", stdout)
+	}
+	if !strings.HasPrefix(stderr, "cat: subdir: ") {
+		t.Errorf("stderr should start with %q, got %q", "cat: subdir: ", stderr)
+	}
+	if strings.Contains(stderr, "No such file or directory") {
+		t.Errorf("stderr should not hardcode 'No such file or directory'; got %q", stderr)
 	}
 }
 
