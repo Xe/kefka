@@ -242,6 +242,51 @@ func TestPrintf(t *testing.T) {
 			wantStdout: "hi",
 		},
 		{
+			name:       "%b interprets backslash newline",
+			args:       []string{"%b", "\\n"},
+			wantStdout: "\n",
+		},
+		{
+			name:       "%b terminates at \\c",
+			args:       []string{"%b", "a\\cb"},
+			wantStdout: "a",
+		},
+		{
+			name:       "%b interprets backslash tab",
+			args:       []string{"%b", "a\\tb"},
+			wantStdout: "a\tb",
+		},
+		{
+			name:       "%b interprets double backslash",
+			args:       []string{"%b", "a\\\\b"},
+			wantStdout: "a\\b",
+		},
+		{
+			name:       "%b interprets octal escape",
+			args:       []string{"%b", "\\0101"},
+			wantStdout: "A",
+		},
+		{
+			name:       "format reuse %d %d with extra args",
+			args:       []string{"%d %d\\n", "1", "2", "3", "4"},
+			wantStdout: "1 2\n3 4\n",
+		},
+		{
+			name:       "width and precision combined %5.3s",
+			args:       []string{"%5.3s", "hello"},
+			wantStdout: "  hel",
+		},
+		{
+			name:       "left-justified width %-10d",
+			args:       []string{"|%-10d|", "42"},
+			wantStdout: "|42        |",
+		},
+		{
+			name:       "literal -v after -- separator",
+			args:       []string{"--", "%s", "-v"},
+			wantStdout: "-v",
+		},
+		{
 			name:       "hex input parsed",
 			args:       []string{"%d", "0x1f"},
 			wantStdout: "31",

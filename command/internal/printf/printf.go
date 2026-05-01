@@ -44,6 +44,12 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		return interp.ExitStatus(2)
 	}
 
+	// -v VAR is a kefka extension influenced by the bash builtin: it stores
+	// the formatted output in VAR instead of writing to stdout. GNU coreutils
+	// printf does not support -v, but kefka's shell integration depends on
+	// it, so it is preserved here. Passing "--" before the format disables
+	// option parsing, matching POSIX usage so a literal "-v" can still be
+	// printed via `printf -- '%s' '-v'`.
 	var targetVar string
 	hasTargetVar := false
 	argIdx := 0
