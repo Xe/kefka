@@ -28,6 +28,8 @@ func newFS(t *testing.T) billy.Filesystem {
 	write("nofinalnl.txt", []byte("x1\nx2\nx3"))
 	write("empty.txt", []byte(""))
 	write("bytes.txt", []byte("abcdefghij"))
+	// File literally named "-n2" — used to verify "--" terminates option parsing.
+	write("-n2", []byte("hello\nworld\n"))
 	return fs
 }
 
@@ -115,9 +117,27 @@ func TestHead(t *testing.T) {
 			wantStdout: "abcdefghij",
 		},
 		{
-			name:       "no trailing newline gets one appended",
+			name:       "no trailing newline preserved",
 			args:       []string{"-n", "10", "nofinalnl.txt"},
-			wantStdout: "x1\nx2\nx3\n",
+			wantStdout: "x1\nx2\nx3",
+		},
+		{
+			name:       "stdin without trailing newline preserved when truncated",
+			args:       []string{"-n", "2"},
+			stdin:      "a\nb\nc",
+			wantStdout: "a\nb\n",
+		},
+		{
+			name:       "stdin with trailing newline keeps newline",
+			args:       []string{"-n", "1"},
+			stdin:      "a\nb\n",
+			wantStdout: "a\n",
+		},
+		{
+			name:       "stdin shorter than n preserves missing final newline",
+			args:       []string{"-n", "5"},
+			stdin:      "a\nb",
+			wantStdout: "a\nb",
 		},
 		{
 			name:       "empty file produces empty output",
@@ -151,6 +171,21 @@ func TestHead(t *testing.T) {
 			wantStdout: "==> five.txt <==\na\n",
 		},
 		{
+			name:       "verbose with multiple files prints headers",
+			args:       []string{"-v", "-n", "1", "five.txt", "twelve.txt"},
+			wantStdout: "==> five.txt <==\na\n\n==> twelve.txt <==\nL1\n",
+		},
+		{
+			name:       "double-dash treats -n2 as filename",
+			args:       []string{"--", "-n2"},
+			wantStdout: "hello\nworld\n",
+		},
+		{
+			name:       "double-dash with -n flag preceding still parses option",
+			args:       []string{"-n", "1", "--", "-n2"},
+			wantStdout: "hello\n",
+		},
+		{
 			name:       "missing file errors but other files still processed",
 			args:       []string{"-n", "1", "nope.txt", "five.txt"},
 			wantStdout: "==> five.txt <==\na\n",
@@ -158,16 +193,44 @@ func TestHead(t *testing.T) {
 			wantErr:    true,
 		},
 		{
-			name:       "negative lines is invalid",
-			args:       []string{"-n", "-5", "five.txt"},
-			wantErrSub: "invalid number of lines",
-			wantErr:    true,
+			name:       "negative lines drops trailing lines",
+			args:       []string{"-n", "-2", "five.txt"},
+			wantStdout: "a\nb\nc\n",
 		},
 		{
-			name:       "negative bytes is invalid",
-			args:       []string{"-c", "-5", "five.txt"},
-			wantErrSub: "invalid number of bytes",
-			wantErr:    true,
+			name:       "negative lines larger than file produces empty",
+			args:       []string{"-n", "-99", "five.txt"},
+			wantStdout: "",
+		},
+		{
+			name:       "negative lines with no trailing newline",
+			args:       []string{"-n", "-1", "nofinalnl.txt"},
+			wantStdout: "x1\nx2\n",
+		},
+		{
+			name:       "negative bytes drops trailing bytes",
+			args:       []string{"-c", "-3", "bytes.txt"},
+			wantStdout: "abcdefg",
+		},
+		{
+			name:       "negative bytes larger than file produces empty",
+			args:       []string{"-c", "-99", "bytes.txt"},
+			wantStdout: "",
+		},
+		{
+			name:       "size suffix K bytes",
+			args:       []string{"-c", "1K", "bytes.txt"},
+			wantStdout: "abcdefghij",
+		},
+		{
+			name:       "size suffix b bytes (512)",
+			args:       []string{"-c", "1b", "bytes.txt"},
+			wantStdout: "abcdefghij",
+		},
+		{
+			name:       "size suffix kB decimal",
+			args:       []string{"-c", "1kB", "bytes.txt"},
+			wantStdout: "abcdefghij",
 		},
 		{
 			name:       "non-numeric lines is invalid",
@@ -213,10 +276,10 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stderr, "Usage: head [OPTION]... [FILE]...") {
 		t.Errorf("usage line missing from stderr: %q", stderr)
 	}
-	if !strings.Contains(stderr, "--lines=NUM") {
+	if !strings.Contains(stderr, "--lines=") {
 		t.Errorf("lines flag missing from help: %q", stderr)
 	}
-	if !strings.Contains(stderr, "--bytes=NUM") {
+	if !strings.Contains(stderr, "--bytes=") {
 		t.Errorf("bytes flag missing from help: %q", stderr)
 	}
 }
