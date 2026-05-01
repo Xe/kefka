@@ -99,7 +99,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("tac", tac.Impl{})
 	reg.Register("tail", tail.Impl{})
 	reg.Register("tee", tee.Impl{})
-	reg.Register("time", time.Impl{Registry: reg})
+	reg.Register("time", time.Impl{})
 	reg.Register("touch", touch.Impl{})
 	reg.Register("tr", tr.Impl{})
 	reg.Register("tree", tree.Impl{})

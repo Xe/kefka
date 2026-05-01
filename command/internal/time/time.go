@@ -12,18 +12,19 @@ import (
 	stdtime "time"
 
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 	"tangled.org/xeiaso.net/kefka/command"
-	"tangled.org/xeiaso.net/kefka/command/registry"
 )
 
-// Impl times the execution of another registered command.
+// Impl times the execution of another command.
 //
-// Registry must be non-nil for the command-execution path; without it,
-// `time CMD ...` cannot dispatch to the inner command. The no-command
-// path (silent success) still works without a registry.
-type Impl struct {
-	Registry *registry.Impl
-}
+// The inner command runs inside a subshell of ec.Runner, so it goes back
+// through the shell's exec-handler chain (registered builtins, functions,
+// path lookup) instead of being dispatched directly. ec.Runner must be set
+// for the command-execution path; without it, `time CMD ...` cannot
+// dispatch to the inner command. The no-command path (silent success)
+// still works without a runner.
+type Impl struct{}
 
 func (impl Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) error {
 	if ec == nil {
@@ -121,7 +122,7 @@ parseLoop:
 	displayCommand := strings.Join(commandArgs, " ")
 
 	startTime := stdtime.Now()
-	innerErr := runInner(ctx, impl.Registry, ec, commandArgs)
+	innerErr := runInner(ctx, ec, commandArgs)
 	elapsedSeconds := stdtime.Since(startTime).Seconds()
 
 	var timingOutput string
@@ -145,17 +146,42 @@ parseLoop:
 	return innerErr
 }
 
-func runInner(ctx context.Context, reg *registry.Impl, ec *command.ExecContext, commandArgs []string) error {
-	if reg == nil {
+// runInner executes the timed command in a subshell of ec.Runner. The
+// command line is reassembled (with each argument shell-quoted) and parsed
+// as bash so it re-enters the runner's exec-handler chain — this is what
+// lets `time` dispatch to registered builtins, shell functions, or PATH
+// binaries the same way the user would have invoked them directly.
+func runInner(ctx context.Context, ec *command.ExecContext, commandArgs []string) error {
+	if ec.Runner == nil {
 		fmt.Fprint(ec.Stderr, "time: exec not available\n")
 		return interp.ExitStatus(127)
 	}
-	cmd, ok := reg.Get(commandArgs[0])
-	if !ok {
-		fmt.Fprintf(ec.Stderr, "time: %s: command not found\n", commandArgs[0])
-		return interp.ExitStatus(127)
+
+	var b strings.Builder
+	for idx, a := range commandArgs {
+		if idx > 0 {
+			b.WriteByte(' ')
+		}
+		quoted, err := syntax.Quote(a, syntax.LangBash)
+		if err != nil {
+			fmt.Fprintf(ec.Stderr, "time: cannot quote argument %q: %v\n", a, err)
+			return interp.ExitStatus(1)
+		}
+		b.WriteString(quoted)
 	}
-	return cmd.Exec(ctx, ec, commandArgs[1:])
+
+	prog, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(b.String()), "<time>")
+	if err != nil {
+		fmt.Fprintf(ec.Stderr, "time: cannot parse command: %v\n", err)
+		return interp.ExitStatus(1)
+	}
+
+	sub := ec.Runner.Subshell()
+	if err := interp.StdIO(ec.Stdin, ec.Stdout, ec.Stderr)(sub); err != nil {
+		fmt.Fprintf(ec.Stderr, "time: cannot configure subshell: %v\n", err)
+		return interp.ExitStatus(1)
+	}
+	return sub.Run(ctx, prog)
 }
 
 func writeTimingFile(ec *command.ExecContext, outputFile, timingOutput string, appendMode bool) error {

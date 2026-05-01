@@ -86,7 +86,7 @@ func (i *Impl) Chdir(fsys billy.Filesystem, target string) error {
 	return nil
 }
 
-func (i *Impl) Exec(ctx context.Context, fsys billy.Filesystem, args []string) error {
+func (i *Impl) Exec(ctx context.Context, fsys billy.Filesystem, runner *interp.Runner, args []string) error {
 	hc := interp.HandlerCtx(ctx)
 
 	if len(args) == 0 {
@@ -109,5 +109,6 @@ func (i *Impl) Exec(ctx context.Context, fsys billy.Filesystem, args []string) e
 		Dir:     i.Pwd(),
 		Environ: hc.Env,
 		FS:      fsys,
+		Runner:  runner,
 	}, cmdArgs)
 }

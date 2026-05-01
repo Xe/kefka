@@ -46,13 +46,16 @@ func run(ctx context.Context) error {
 
 	fsys := osfs.New(".")
 
+	var sh *interp.Runner
+
 	middleware := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
-			return reg.Exec(ctx, fsys, args)
+			return reg.Exec(ctx, fsys, sh, args)
 		}
 	}
 
-	sh, err := interp.New(
+	var err error
+	sh, err = interp.New(
 		interp.Interactive(true),
 		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 		interp.ExecHandlers(middleware),

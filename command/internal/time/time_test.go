@@ -82,6 +82,24 @@ func newFS(t *testing.T) billy.Filesystem {
 	return memfs.New()
 }
 
+// newRunner builds an interp.Runner whose exec handler dispatches into reg.
+// This is what threads the registered Execers through Runner.Subshell().Run.
+func newRunner(t *testing.T, reg *registry.Impl, fsys billy.Filesystem) *interp.Runner {
+	t.Helper()
+	var sh *interp.Runner
+	middleware := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			return reg.Exec(ctx, fsys, sh, args)
+		}
+	}
+	var err error
+	sh, err = interp.New(interp.ExecHandlers(middleware))
+	if err != nil {
+		t.Fatalf("interp.New: %v", err)
+	}
+	return sh
+}
+
 type runResult struct {
 	stdout string
 	stderr string
@@ -91,17 +109,19 @@ type runResult struct {
 func run(t *testing.T, args []string, opts ...func(*command.ExecContext)) runResult {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
+	fsys := newFS(t)
+	reg := newRegistry(t)
 	ec := &command.ExecContext{
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Dir:    ".",
-		FS:     newFS(t),
+		FS:     fsys,
+		Runner: newRunner(t, reg, fsys),
 	}
 	for _, opt := range opts {
 		opt(ec)
 	}
-	impl := Impl{Registry: newRegistry(t)}
-	err := impl.Exec(context.Background(), ec, args)
+	err := Impl{}.Exec(context.Background(), ec, args)
 	return runResult{
 		stdout: stdout.String(),
 		stderr: stderr.String(),
@@ -374,15 +394,16 @@ func TestTime_FormatElapsedTime(t *testing.T) {
 
 func TestTime_OutputToFile(t *testing.T) {
 	fs := memfs.New()
+	reg := newRegistry(t)
 	var stdout, stderr bytes.Buffer
 	ec := &command.ExecContext{
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Dir:    ".",
 		FS:     fs,
+		Runner: newRunner(t, reg, fs),
 	}
-	impl := Impl{Registry: newRegistry(t)}
-	err := impl.Exec(context.Background(), ec, []string{"-o", "out.log", "-f", "fixed", "echo", "hi"})
+	err := Impl{}.Exec(context.Background(), ec, []string{"-o", "out.log", "-f", "fixed", "echo", "hi"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -406,15 +427,16 @@ func TestTime_AppendToFile(t *testing.T) {
 	io.WriteString(f, "previous\n")
 	f.Close()
 
+	reg := newRegistry(t)
 	var stdout, stderr bytes.Buffer
 	ec := &command.ExecContext{
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Dir:    ".",
 		FS:     fs,
+		Runner: newRunner(t, reg, fs),
 	}
-	impl := Impl{Registry: newRegistry(t)}
-	err = impl.Exec(context.Background(), ec, []string{"-o", "out.log", "-a", "-f", "appended", "echo", "hi"})
+	err = Impl{}.Exec(context.Background(), ec, []string{"-o", "out.log", "-a", "-f", "appended", "echo", "hi"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -434,15 +456,16 @@ func TestTime_OverwriteFile(t *testing.T) {
 	io.WriteString(f, "previous\n")
 	f.Close()
 
+	reg := newRegistry(t)
 	var stdout, stderr bytes.Buffer
 	ec := &command.ExecContext{
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Dir:    ".",
 		FS:     fs,
+		Runner: newRunner(t, reg, fs),
 	}
-	impl := Impl{Registry: newRegistry(t)}
-	err = impl.Exec(context.Background(), ec, []string{"-o", "out.log", "-f", "fresh", "echo", "hi"})
+	err = Impl{}.Exec(context.Background(), ec, []string{"-o", "out.log", "-f", "fresh", "echo", "hi"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -470,12 +493,16 @@ func TestTime_CommandNotFound(t *testing.T) {
 	if !errors.As(r.err, &status) || uint8(status) != 127 {
 		t.Errorf("err = %v, want ExitStatus(127)", r.err)
 	}
-	if !strings.Contains(r.stderr, "does-not-exist: command not found") {
+	if !strings.Contains(r.stderr, "command not found") ||
+		!strings.Contains(r.stderr, "does-not-exist") {
 		t.Errorf("stderr missing not-found message: %q", r.stderr)
 	}
 }
 
-func TestTime_NilRegistry(t *testing.T) {
+func TestTime_NilRunner(t *testing.T) {
+	// Without a runner, time has no way to dispatch the inner command, so
+	// it short-circuits to a 127 with the same diagnostic the registry
+	// path used to produce.
 	var stdout, stderr bytes.Buffer
 	ec := &command.ExecContext{
 		Stdout: &stdout,
@@ -483,8 +510,7 @@ func TestTime_NilRegistry(t *testing.T) {
 		Dir:    ".",
 		FS:     memfs.New(),
 	}
-	impl := Impl{Registry: nil}
-	err := impl.Exec(context.Background(), ec, []string{"echo", "hi"})
+	err := Impl{}.Exec(context.Background(), ec, []string{"echo", "hi"})
 	var status interp.ExitStatus
 	if !errors.As(err, &status) || uint8(status) != 127 {
 		t.Errorf("err = %v, want ExitStatus(127)", err)
@@ -495,16 +521,18 @@ func TestTime_NilRegistry(t *testing.T) {
 }
 
 func TestTime_StdinPassthrough(t *testing.T) {
+	fs := memfs.New()
+	reg := newRegistry(t)
 	var stdout, stderr bytes.Buffer
 	ec := &command.ExecContext{
 		Stdin:  strings.NewReader("piped through"),
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Dir:    ".",
-		FS:     memfs.New(),
+		FS:     fs,
+		Runner: newRunner(t, reg, fs),
 	}
-	impl := Impl{Registry: newRegistry(t)}
-	err := impl.Exec(context.Background(), ec, []string{"stdin-echo"})
+	err := Impl{}.Exec(context.Background(), ec, []string{"stdin-echo"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -514,8 +542,7 @@ func TestTime_StdinPassthrough(t *testing.T) {
 }
 
 func TestTime_NilExecContext(t *testing.T) {
-	impl := Impl{Registry: newRegistry(t)}
-	err := impl.Exec(context.Background(), nil, []string{"echo", "hi"})
+	err := Impl{}.Exec(context.Background(), nil, []string{"echo", "hi"})
 	if err == nil || !strings.Contains(err.Error(), "nil ExecContext") {
 		t.Errorf("err = %v, want nil ExecContext error", err)
 	}
