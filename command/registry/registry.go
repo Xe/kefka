@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	ErrCommandNotFound = errors.New("registry: command not found")
+	ErrCommandNotFound = errors.New("kefka: command not found")
 )
 
 type Impl struct {
@@ -103,8 +103,7 @@ func (i *Impl) Exec(ctx context.Context, fsys billy.Filesystem, runner *interp.R
 
 	cmd, ok := i.Get(cmdName)
 	if !ok {
-		fmt.Fprintf(hc.Stderr, "kefka: command not found: %s\n", cmdName)
-		return errors.Join(interp.ExitStatus(127), ErrCommandNotFound)
+		return errors.Join(fmt.Errorf("%w: %s", ErrCommandNotFound, cmdName), interp.ExitStatus(127))
 	}
 
 	return cmd.Exec(ctx, &command.ExecContext{
