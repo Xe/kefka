@@ -45,14 +45,39 @@ func TestDate(t *testing.T) {
 			wantStdout: "Wed Jan 15 12:00:00 UTC 2025\n",
 		},
 		{
-			name:       "iso 8601 short form",
+			name:       "iso 8601 default is date",
 			args:       []string{"-I", "-d", fixed},
+			wantStdout: "2025-01-15\n",
+		},
+		{
+			name:       "iso 8601 long form default is date",
+			args:       []string{"--iso-8601", "-d", fixed},
+			wantStdout: "2025-01-15\n",
+		},
+		{
+			name:       "iso 8601 hours precision",
+			args:       []string{"-Ihours", "-d", fixed},
+			wantStdout: "2025-01-15T12+0000\n",
+		},
+		{
+			name:       "iso 8601 minutes precision",
+			args:       []string{"-Iminutes", "-d", fixed},
+			wantStdout: "2025-01-15T12:00+0000\n",
+		},
+		{
+			name:       "iso 8601 seconds precision",
+			args:       []string{"-Iseconds", "-d", fixed},
 			wantStdout: "2025-01-15T12:00:00+0000\n",
 		},
 		{
-			name:       "iso 8601 long form",
-			args:       []string{"--iso-8601", "-d", fixed},
+			name:       "iso 8601 long form with seconds",
+			args:       []string{"--iso-8601=seconds", "-d", fixed},
 			wantStdout: "2025-01-15T12:00:00+0000\n",
+		},
+		{
+			name:    "iso 8601 invalid precision errors",
+			args:    []string{"-Ibogus", "-d", fixed},
+			wantErr: true,
 		},
 		{
 			name:       "rfc email short form",
@@ -205,6 +230,33 @@ func TestDate(t *testing.T) {
 			wantStdout: "2025-01-15T12:00:00Z\n",
 		},
 		{
+			name:       "epoch at-sign zero",
+			args:       []string{"-d", "@0", "+%Y-%m-%d"},
+			wantStdout: "1970-01-01\n",
+		},
+		{
+			name:       "epoch at-sign timestamp",
+			args:       []string{"-d", "@1736942400", "+%Y-%m-%dT%H:%M:%SZ"},
+			wantStdout: "2025-01-15T12:00:00Z\n",
+		},
+		{
+			// %E followed by %, which is a literal-spec, not a date
+			// spec. GNU coreutils prints %E literally and proceeds.
+			name:       "locale modifier E with non-spec next char",
+			args:       []string{"-d", fixed, "+%E%Y"},
+			wantStdout: "%E2025\n",
+		},
+		{
+			name:       "locale modifier O falls back to d",
+			args:       []string{"-d", fixed, "+%Od"},
+			wantStdout: "15\n",
+		},
+		{
+			name:       "locale modifier EY falls back to Y",
+			args:       []string{"-d", fixed, "+%EY"},
+			wantStdout: "2025\n",
+		},
+		{
 			name:       "date keyword now is accepted",
 			args:       []string{"-d", "now", "+%Y"},
 			wantStdout: "", // year depends on real clock; only assert non-empty below
@@ -240,6 +292,30 @@ func TestDate(t *testing.T) {
 			}
 			if tt.wantErrSub != "" && !strings.Contains(stderr, tt.wantErrSub) {
 				t.Errorf("stderr = %q, want substring %q", stderr, tt.wantErrSub)
+			}
+		})
+	}
+}
+
+func TestRelativeOffsets(t *testing.T) {
+	tests := []string{
+		"5 minutes ago",
+		"1 hour ago",
+		"2 days ago",
+		"+1 day",
+		"-3 hours",
+		"1 week ago",
+		"30 seconds ago",
+	}
+	for _, tt := range tests {
+		t.Run(tt, func(t *testing.T) {
+			stdout, stderr, err := run(t, []string{"-d", tt, "+%Y-%m-%d"})
+			if err != nil {
+				t.Fatalf("unexpected error: %v; stderr=%q", err, stderr)
+			}
+			s := strings.TrimSpace(stdout)
+			if _, err := time.Parse("2006-01-02", s); err != nil {
+				t.Errorf("expected ISO date, got %q (parse err: %v)", s, err)
 			}
 		})
 	}
