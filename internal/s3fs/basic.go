@@ -59,7 +59,46 @@ func (fs3 *S3FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.Fi
 
 	switch flag & SupportedOFlags {
 	case O_RDONLY:
-		return newS3ReadFile(fs3.client, fs3.bucket, p)
+		// The bucket root is always a directory; short-circuit so WASI
+		// preopens (which OpenFile(".", O_RDONLY)) don't issue an S3 call.
+		key := strings.TrimPrefix(fs3.cleanPath(filename), "/")
+		if key == "" || key == "." {
+			return newS3DirFile(p), nil
+		}
+
+		f, err := newS3ReadFile(fs3.client, fs3.bucket, p)
+		if err == nil {
+			return f, nil
+		}
+
+		// If the object simply doesn't exist, the path may still be a
+		// directory prefix in S3. Probe for that before giving up.
+		var apiErr smithy.APIError
+		if !errors.As(err, &apiErr) {
+			return nil, err
+		}
+		switch apiErr.ErrorCode() {
+		case "NoSuchKey", "NotFound":
+		default:
+			return nil, err
+		}
+
+		ctx := context.TODO()
+		prefix := key + "/"
+		maxKeys := int32(1)
+		list, lerr := fs3.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:    &fs3.bucket,
+			Prefix:    &prefix,
+			Delimiter: &fs3.separator,
+			MaxKeys:   &maxKeys,
+		})
+		if lerr != nil {
+			return nil, lerr
+		}
+		if len(list.Contents) > 0 || len(list.CommonPrefixes) > 0 {
+			return newS3DirFile(p), nil
+		}
+		return nil, &os.PathError{Op: "open", Path: filename, Err: fs.ErrNotExist}
 
 	case O_WRONLY:
 		return newS3WriteFile(fs3.client, fs3.bucket, p)

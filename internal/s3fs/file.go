@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"os"
+	"syscall"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"go.uber.org/atomic"
@@ -353,3 +354,44 @@ func (f *s3MultipartUploadFile) Unlock() error {
 func (f *s3MultipartUploadFile) Truncate(size int64) error {
 	return ErrTruncateNotSupported
 }
+
+// s3DirFile is a billy.File handle for a directory in S3. S3 has no real
+// directories, but WASI guests (via wazero) open the preopen root by calling
+// OpenFile(".", O_RDONLY) and then asking IsDir() — so we return a pseudo-file
+// that reports as a directory and rejects byte I/O with EISDIR.
+type s3DirFile struct {
+	name   string
+	closed bool
+}
+
+func newS3DirFile(name string) *s3DirFile {
+	return &s3DirFile{name: name}
+}
+
+// Name returns the name of the file as presented to Open.
+func (f *s3DirFile) Name() string {
+	return f.name
+}
+
+func (f *s3DirFile) eisdir(op string) error {
+	return &os.PathError{Op: op, Path: f.name, Err: syscall.EISDIR}
+}
+
+func (f *s3DirFile) Read(p []byte) (int, error)            { return 0, f.eisdir("read") }
+func (f *s3DirFile) ReadAt(p []byte, off int64) (int, error) { return 0, f.eisdir("read") }
+func (f *s3DirFile) Write(p []byte) (int, error)           { return 0, f.eisdir("write") }
+func (f *s3DirFile) Seek(offset int64, whence int) (int64, error) {
+	return 0, f.eisdir("seek")
+}
+func (f *s3DirFile) Truncate(size int64) error { return f.eisdir("truncate") }
+
+func (f *s3DirFile) Close() error {
+	if f.closed {
+		return ErrFileClosed
+	}
+	f.closed = true
+	return nil
+}
+
+func (f *s3DirFile) Lock() error   { return ErrLockNotSupported }
+func (f *s3DirFile) Unlock() error { return ErrLockNotSupported }
