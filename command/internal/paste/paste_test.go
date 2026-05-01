@@ -26,6 +26,10 @@ func newFS(t *testing.T) billy.Filesystem {
 	write("a.txt", []byte("a1\na2\na3\n"))
 	write("b.txt", []byte("b1\nb2\n"))
 	write("c.txt", []byte("c1\nc2\nc3\nc4\n"))
+	write("d.txt", []byte("d1\nd2\n"))
+	write("f1.txt", []byte("p\nq\nr\n"))
+	write("f2.txt", []byte("s\nt\n"))
+	write("f3.txt", []byte("u\nv\nw\n"))
 	write("empty.txt", []byte(""))
 	write("nofinalnl.txt", []byte("x1\nx2"))
 	return fs
@@ -149,6 +153,86 @@ func TestPaste(t *testing.T) {
 			name:    "unknown flag errors",
 			args:    []string{"--nope"},
 			wantErr: true,
+		},
+		{
+			name:       "literal tab via shell escape",
+			args:       []string{"-d", "\t", "a.txt", "b.txt"},
+			wantStdout: "a1\tb1\na2\tb2\na3\t\n",
+		},
+		{
+			name:       "backslash-t escape parses as tab",
+			args:       []string{"-d", `\t`, "a.txt", "b.txt"},
+			wantStdout: "a1\tb1\na2\tb2\na3\t\n",
+		},
+		{
+			name:       "backslash-n escape parses as newline",
+			args:       []string{"-d", `\n`, "a.txt", "b.txt"},
+			wantStdout: "a1\nb1\na2\nb2\na3\n\n",
+		},
+		{
+			name:       "backslash-backslash escape parses as literal backslash",
+			args:       []string{"-d", `\\`, "a.txt", "b.txt"},
+			wantStdout: "a1\\b1\na2\\b2\na3\\\n",
+		},
+		{
+			name:       "backslash-zero is empty separator slot",
+			args:       []string{"-d", `\0X`, "a.txt", "b.txt", "c.txt", "d.txt"},
+			wantStdout: "a1b1Xc1d1\na2b2Xc2d2\na3Xc3\nXc4\n",
+		},
+		{
+			name:       "mixed backslash escapes cycle",
+			args:       []string{"-d", `a\nb`, "f1.txt", "f2.txt", "f3.txt"},
+			wantStdout: "pas\nu\nqat\nv\nra\nw\n",
+		},
+		{
+			// Three files, cycle [a, empty, b]; each line uses two
+			// delimiter slots: 'a' between col1/col2, '' (empty) between
+			// col2/col3. Cycle resets per output line in non-serial mode.
+			name:       "a-null-b cycle skips between cols 2 and 3",
+			args:       []string{"-d", `a\0b`, "f1.txt", "f2.txt", "f3.txt"},
+			wantStdout: "pasu\nqatv\nraw\n",
+		},
+		{
+			// Cycle [a, empty, b] reaches the 'b' element when there are
+			// four files: separators are a, empty, b between cols 1-2, 2-3,
+			// 3-4 respectively.
+			name:       "a-null-b cycle reaches third element with four files",
+			args:       []string{"-d", `a\0b`, "f1.txt", "f2.txt", "f3.txt", "f1.txt"},
+			wantStdout: "pasubp\nqatvbq\nrawbr\n",
+		},
+		{
+			// POSIX: empty list is unspecified. GNU and our impl silently
+			// accept it as "no separator", matching paste -d '\0'.
+			name:       "empty delimiter list matches \\0 behavior",
+			args:       []string{"-d", "", "a.txt", "b.txt", "c.txt"},
+			wantStdout: "a1b1c1\na2b2c2\na3c3\nc4\n",
+		},
+		{
+			name:       "mixed backslash escapes cycle reaches third element in serial",
+			args:       []string{"-s", "-d", `a\nb`, "c.txt"},
+			wantStdout: "c1ac2\nc3bc4\n",
+		},
+		{
+			name:       "invalid backslash escape errors",
+			args:       []string{"-d", `\q`, "a.txt", "b.txt"},
+			wantErrSub: `'\q' is not a valid delimiter`,
+			wantErr:    true,
+		},
+		{
+			name:       "trailing backslash errors",
+			args:       []string{"-d", `\`, "a.txt", "b.txt"},
+			wantErrSub: "delimiter list ends with an unescaped backslash",
+			wantErr:    true,
+		},
+		{
+			name:       "serial single delimiter joins lines",
+			args:       []string{"-s", "-d", "X", "a.txt"},
+			wantStdout: "a1Xa2Xa3\n",
+		},
+		{
+			name:       "serial cyclic delimiters reset between files",
+			args:       []string{"-s", "-d", "XY", "f1.txt", "f2.txt"},
+			wantStdout: "pXqYr\nsXt\n",
 		},
 	}
 

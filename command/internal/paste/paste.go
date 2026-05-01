@@ -38,7 +38,11 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 		fmt.Fprint(stderr, "Write lines consisting of the sequentially corresponding lines from\n")
 		fmt.Fprint(stderr, "each FILE, separated by TABs, to standard output.\n")
 		fmt.Fprint(stderr, "With no FILE, or when FILE is -, read standard input.\n\n")
-		fmt.Fprint(stderr, "  -d, --delimiters=LIST   reuse characters from LIST instead of TABs\n")
+		fmt.Fprint(stderr, "  -d, --delimiters=LIST   reuse characters from LIST instead of TABs;\n")
+		fmt.Fprint(stderr, "                          recognized backslash escapes are \\n, \\t, \\\\,\n")
+		fmt.Fprint(stderr, "                          and \\0 (which represents the empty/no-delimiter\n")
+		fmt.Fprint(stderr, "                          slot in the cycle). An empty LIST is accepted\n")
+		fmt.Fprint(stderr, "                          and behaves like \\0 (no separator emitted).\n")
 		fmt.Fprint(stderr, "  -s, --serial            paste one file at a time instead of in parallel\n")
 		fmt.Fprint(stderr, "      --help              display this help and exit\n")
 	}
@@ -61,6 +65,12 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 	files := set.Args()
 	if len(files) == 0 {
 		fmt.Fprint(stderr, "usage: paste [-s] [-d delimiters] file ...\n")
+		return interp.ExitStatus(1)
+	}
+
+	delims, err := parseDelimiters(*delimiters)
+	if err != nil {
+		fmt.Fprintf(stderr, "paste: %s\n", err)
 		return interp.ExitStatus(1)
 	}
 
@@ -99,12 +109,11 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 		fileContents = append(fileContents, lines)
 	}
 
-	delim := *delimiters
 	var output strings.Builder
 
 	if *serial {
 		for _, lines := range fileContents {
-			output.WriteString(joinWithDelimiters(lines, delim))
+			output.WriteString(joinWithDelimiters(lines, delims))
 			output.WriteByte('\n')
 		}
 	} else {
@@ -121,7 +130,7 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 					parts[i] = lines[lineIdx]
 				}
 			}
-			output.WriteString(joinWithDelimiters(parts, delim))
+			output.WriteString(joinWithDelimiters(parts, delims))
 			output.WriteByte('\n')
 		}
 	}
@@ -130,22 +139,62 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 	return nil
 }
 
-func joinWithDelimiters(parts []string, delimiters string) string {
+// delim is one element of the parsed delimiter cycle. empty=true represents the
+// '\0' POSIX sentinel: at this slot in the cycle, no character is emitted.
+type delim struct {
+	r     rune
+	empty bool
+}
+
+func parseDelimiters(list string) ([]delim, error) {
+	if list == "" {
+		return nil, nil
+	}
+	var out []delim
+	runes := []rune(list)
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		if c != '\\' {
+			out = append(out, delim{r: c})
+			continue
+		}
+		if i+1 >= len(runes) {
+			return nil, errors.New("delimiter list ends with an unescaped backslash")
+		}
+		i++
+		switch runes[i] {
+		case 'n':
+			out = append(out, delim{r: '\n'})
+		case 't':
+			out = append(out, delim{r: '\t'})
+		case '\\':
+			out = append(out, delim{r: '\\'})
+		case '0':
+			out = append(out, delim{empty: true})
+		default:
+			return nil, fmt.Errorf("'\\%c' is not a valid delimiter", runes[i])
+		}
+	}
+	return out, nil
+}
+
+func joinWithDelimiters(parts []string, delims []delim) string {
 	if len(parts) == 0 {
 		return ""
 	}
 	if len(parts) == 1 {
 		return parts[0]
 	}
-	delimRunes := []rune(delimiters)
-	if len(delimRunes) == 0 {
+	if len(delims) == 0 {
 		return strings.Join(parts, "")
 	}
 	var b strings.Builder
 	b.WriteString(parts[0])
 	for i := 1; i < len(parts); i++ {
-		idx := (i - 1) % len(delimRunes)
-		b.WriteRune(delimRunes[idx])
+		d := delims[(i-1)%len(delims)]
+		if !d.empty {
+			b.WriteRune(d.r)
+		}
 		b.WriteString(parts[i])
 	}
 	return b.String()
