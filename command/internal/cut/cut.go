@@ -8,6 +8,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/pborman/getopt/v2"
 	"mvdan.cc/sh/v3/interp"
@@ -37,17 +38,21 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	usage := func() {
 		fmt.Fprint(stderr, "Usage: cut [OPTION]... [FILE]...\n")
 		fmt.Fprint(stderr, "Remove sections from each line of FILE(s).\n\n")
+		fmt.Fprint(stderr, "  -b LIST              select only these bytes\n")
 		fmt.Fprint(stderr, "  -c LIST              select only these characters\n")
 		fmt.Fprint(stderr, "  -d DELIM             use DELIM instead of TAB for field delimiter\n")
 		fmt.Fprint(stderr, "  -f LIST              select only these fields\n")
+		fmt.Fprint(stderr, "  -n                   with -b: do not split multibyte characters\n")
 		fmt.Fprint(stderr, "  -s, --only-delimited  do not print lines without delimiters\n")
 		fmt.Fprint(stderr, "      --help           display this help and exit\n")
 	}
 	set.SetUsage(usage)
 
+	byteSpec := set.String('b', "", "select only these bytes")
 	charSpec := set.String('c', "", "select only these characters")
 	delim := set.String('d', "\t", "use DELIM instead of TAB for field delimiter")
 	fieldSpec := set.String('f', "", "select only these fields")
+	noSplit := set.Bool('n', "with -b: do not split multibyte characters")
 	suppressNoDelim := set.BoolLong("only-delimited", 's', "do not print lines without delimiters")
 	help := set.BoolLong("help", 0, "display this help and exit")
 
@@ -61,7 +66,21 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		return nil
 	}
 
-	if *fieldSpec == "" && *charSpec == "" {
+	modes := 0
+	if *byteSpec != "" {
+		modes++
+	}
+	if *charSpec != "" {
+		modes++
+	}
+	if *fieldSpec != "" {
+		modes++
+	}
+	if modes > 1 {
+		fmt.Fprint(stderr, "cut: only one type of list may be specified\n")
+		return interp.ExitStatus(1)
+	}
+	if modes == 0 {
 		fmt.Fprint(stderr, "cut: you must specify a list of bytes, characters, or fields\n")
 		return interp.ExitStatus(1)
 	}
@@ -72,12 +91,14 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		return err
 	}
 
-	spec := *fieldSpec
-	if spec == "" {
+	var spec string
+	switch {
+	case *byteSpec != "":
+		spec = *byteSpec
+	case *charSpec != "":
 		spec = *charSpec
-	}
-	if spec == "" {
-		spec = "1"
+	default:
+		spec = *fieldSpec
 	}
 	ranges := parseRanges(spec)
 
@@ -93,24 +114,22 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 
 	var out strings.Builder
 	for _, line := range lines {
-		if *charSpec != "" {
-			chars := []rune(line)
-			var selected []rune
-			for _, r := range ranges {
-				start := r.start - 1
-				end := r.end
-				if r.toEnd {
-					end = len(chars)
-				}
-				for i := start; i < end && i < len(chars); i++ {
-					if i >= 0 {
-						selected = append(selected, chars[i])
-					}
-				}
+		switch {
+		case *byteSpec != "":
+			lineBytes := []byte(line)
+			rs := ranges
+			if *noSplit {
+				rs = adjustRangesNoSplit(lineBytes, ranges)
 			}
+			selected := extractBytes(lineBytes, rs)
+			out.Write(selected)
+			out.WriteString("\n")
+		case *charSpec != "":
+			chars := []rune(line)
+			selected := extractRunes(chars, ranges)
 			out.WriteString(string(selected))
 			out.WriteString("\n")
-		} else {
+		default:
 			if *suppressNoDelim && !strings.Contains(line, d) {
 				continue
 			}
@@ -166,7 +185,7 @@ func parseRanges(spec string) []cutRange {
 
 func extractByRanges(items []string, ranges []cutRange) []string {
 	var result []string
-	seen := make(map[string]struct{})
+	seen := make(map[int]struct{})
 	for _, r := range ranges {
 		start := r.start - 1
 		end := r.end
@@ -175,14 +194,118 @@ func extractByRanges(items []string, ranges []cutRange) []string {
 		}
 		for i := start; i < end && i < len(items); i++ {
 			if i >= 0 {
-				if _, ok := seen[items[i]]; !ok {
-					seen[items[i]] = struct{}{}
+				if _, ok := seen[i]; !ok {
+					seen[i] = struct{}{}
 					result = append(result, items[i])
 				}
 			}
 		}
 	}
 	return result
+}
+
+func extractRunes(chars []rune, ranges []cutRange) []rune {
+	var result []rune
+	seen := make(map[int]struct{})
+	for _, r := range ranges {
+		start := r.start - 1
+		end := r.end
+		if r.toEnd {
+			end = len(chars)
+		}
+		for i := start; i < end && i < len(chars); i++ {
+			if i >= 0 {
+				if _, ok := seen[i]; !ok {
+					seen[i] = struct{}{}
+					result = append(result, chars[i])
+				}
+			}
+		}
+	}
+	return result
+}
+
+func extractBytes(b []byte, ranges []cutRange) []byte {
+	var result []byte
+	seen := make(map[int]struct{})
+	for _, r := range ranges {
+		start := r.start - 1
+		end := r.end
+		if r.toEnd {
+			end = len(b)
+		}
+		for i := start; i < end && i < len(b); i++ {
+			if i >= 0 {
+				if _, ok := seen[i]; !ok {
+					seen[i] = struct{}{}
+					result = append(result, b[i])
+				}
+			}
+		}
+	}
+	return result
+}
+
+// adjustRangesNoSplit applies the POSIX -n algorithm to byte ranges. For each
+// range low-high: if low is not the first byte of a character, decrement low
+// to the character start; if high is not the last byte of a character,
+// decrement high to the last byte of the prior character (or zero). Drop the
+// range if high becomes zero or low exceeds high.
+func adjustRangesNoSplit(b []byte, ranges []cutRange) []cutRange {
+	if len(b) == 0 {
+		return ranges
+	}
+	starts, ends := charBoundaries(b)
+	var out []cutRange
+	for _, r := range ranges {
+		low := r.start
+		high := r.end
+		if r.toEnd {
+			high = len(b)
+		}
+		if low < 1 {
+			low = 1
+		}
+		if high > len(b) {
+			high = len(b)
+		}
+		if low > len(b) {
+			out = append(out, cutRange{start: 0, end: 0})
+			continue
+		}
+		if !starts[low-1] {
+			for low > 1 && !starts[low-1] {
+				low--
+			}
+		}
+		if high >= 1 && high <= len(b) && !ends[high-1] {
+			for high > 0 && !ends[high-1] {
+				high--
+			}
+		}
+		if high < low || high == 0 {
+			out = append(out, cutRange{start: 0, end: 0})
+			continue
+		}
+		out = append(out, cutRange{start: low, end: high})
+	}
+	return out
+}
+
+func charBoundaries(b []byte) (starts, ends []bool) {
+	starts = make([]bool, len(b))
+	ends = make([]bool, len(b))
+	i := 0
+	for i < len(b) {
+		_, size := utf8.DecodeRune(b[i:])
+		if size <= 0 {
+			size = 1
+		}
+		starts[i] = true
+		ends[i+size-1] = true
+		i += size
+	}
+	return starts, ends
 }
 
 func readInput(ec *command.ExecContext, files []string, stderr io.Writer) (string, error) {
