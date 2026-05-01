@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	pathpkg "path"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -13,16 +15,14 @@ import (
 
 // ReadDir reads the directory named by dirname and returns a list of
 // directory entries sorted by filename.
-func (fs3 *S3FS) ReadDir(path string) ([]os.FileInfo, error) {
-	// p := fs3.cleanPath(fs3.root, path)
-	// if p != "" {
-	// 	p += "/"
-	// }
-	// fmt.Println("ReadDir:", p)
-	p := path
+func (fs3 *S3FS) ReadDir(dir string) ([]os.FileInfo, error) {
+	key := strings.TrimPrefix(fs3.cleanPath(dir), "/")
+	var prefix string
+	if key != "" && key != "." {
+		prefix = key + "/"
+	}
 
-	// Create a context with a timeout
-	ctx := context.TODO() // TODO: Get user context?
+	ctx := context.TODO()
 
 	var ct *string
 	var dirs []os.FileInfo
@@ -30,7 +30,7 @@ func (fs3 *S3FS) ReadDir(path string) ([]os.FileInfo, error) {
 	for {
 		res, err := fs3.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 			Bucket:            &fs3.bucket,
-			Prefix:            &p,
+			Prefix:            &prefix,
 			ContinuationToken: ct,
 			Delimiter:         &fs3.separator,
 		})
@@ -38,32 +38,38 @@ func (fs3 *S3FS) ReadDir(path string) ([]os.FileInfo, error) {
 			return nil, err
 		}
 
-		// Add the directories to the list
 		for _, d := range res.CommonPrefixes {
-			dirs = append(dirs, newDirInfo(*d.Prefix))
+			name := strings.TrimSuffix(strings.TrimPrefix(aws.ToString(d.Prefix), prefix), "/")
+			if name == "" {
+				continue
+			}
+			dirs = append(dirs, newDirInfo(name))
 		}
 
-		// Add the files to the list
 		for _, f := range res.Contents {
+			full := aws.ToString(f.Key)
+			if full == prefix {
+				// zero-byte directory placeholder; skip
+				continue
+			}
+			name := strings.TrimPrefix(full, prefix)
+			if name == "" {
+				continue
+			}
 			files = append(files, newFileInfo(
-				aws.ToString(f.Key),
-				*f.Size,
+				pathpkg.Base(name),
+				aws.ToInt64(f.Size),
 				aws.ToTime(f.LastModified),
 			))
 		}
 
-		// Set the last key
-		ct = res.NextContinuationToken
-
-		// If there are no more keys, break
-		if !*res.IsTruncated {
+		if !aws.ToBool(res.IsTruncated) {
 			break
 		}
+		ct = res.NextContinuationToken
 	}
 
-	// Join the directories and files & return
-	res := append(dirs, files...)
-	return res, nil
+	return append(dirs, files...), nil
 }
 
 // MkdirAll creates a directory named path, along with any necessary

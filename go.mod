@@ -6,13 +6,16 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.17
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.100.1
+	github.com/aws/smithy-go v1.25.1
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-billy/v5 v5.8.0
+	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/pborman/getopt/v2 v2.1.0
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/spf13/pflag v1.0.10
 	github.com/tetratelabs/wazero v1.11.0
+	github.com/tigrisdata/storage-go v0.6.0
 	go.uber.org/atomic v1.11.0
 	golang.org/x/term v0.41.0
 	golang.org/x/text v0.29.0
@@ -35,7 +38,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.17 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1 // indirect
-	github.com/aws/smithy-go v1.25.1 // indirect
 	github.com/cyphar/filepath-securejoin v0.3.6 // indirect
 	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect

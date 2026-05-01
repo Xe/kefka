@@ -11,9 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/gliderlabs/ssh"
-	"github.com/go-git/go-billy/v5/osfs"
+	"github.com/google/uuid"
 	"github.com/spf13/pflag"
+	"github.com/tigrisdata/storage-go"
 	"golang.org/x/term"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
@@ -22,11 +25,20 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/registry/coreutils"
 	"tangled.org/xeiaso.net/kefka/command/registry/wasmprog"
 	"tangled.org/xeiaso.net/kefka/internal/billysh"
+	"tangled.org/xeiaso.net/kefka/internal/s3fs"
+
+	_ "embed"
+
+	_ "github.com/joho/godotenv/autoload"
 )
 
 var (
 	bind    = pflag.StringP("bind", "b", ":2222", "host:port to bind SSH to")
+	bucket  = pflag.StringP("bucket", "B", os.Getenv("BUCKET_NAME"), "the bucket name to constrain sessions to")
 	timeout = pflag.DurationP("timeout", "T", 5*time.Minute, "the total time a command can run for")
+
+	//go:embed static/motd
+	motd []byte
 )
 
 func main() {
@@ -59,21 +71,56 @@ func New() *Server {
 }
 
 func (s *Server) HandleSSH(sess ssh.Session) {
-	if err := s.runKefka(sess); err != nil {
+	sess.Write(motd)
+
+	lg := slog.With("remoteAddr", sess.RemoteAddr().String(), "user", sess.User())
+	lg.Info("got connection")
+
+	if err := s.runKefka(sess, lg); err != nil {
 		fmt.Fprintln(sess, "internal server error:", err)
-		slog.Error("error serving Kefka session", "err", err)
+		slog.Error("error serving Kefka session", "err", err, "remoteAddr", sess.RemoteAddr().String())
 		return
 	}
 }
 
-func (s *Server) runKefka(sess ssh.Session) error {
-	tempDir, err := os.MkdirTemp("", "sophia-"+sess.RemoteAddr().String()+"-*")
+func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
+	client, err := storage.New(sess.Context())
 	if err != nil {
-		return fmt.Errorf("can't make chroot jail: %w", err)
+		return fmt.Errorf("can't make storage client: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
 
-	fsys := osfs.New(tempDir)
+	sessID := uuid.Must(uuid.NewV7()).String()
+	sessBucket := *bucket + "-" + sessID
+	lg = lg.With("sessionBucket", sessBucket)
+
+	fmt.Fprintln(sess)
+	fmt.Fprintf(sess, "You are isolated to the bucket %s, which was automatically forked from %s on connection.\n", sessBucket, *bucket)
+	fmt.Fprintln(sess)
+
+	if _, err := client.CreateBucketFork(sess.Context(), *bucket, sessBucket); err != nil {
+		return fmt.Errorf("can't create per-session bucket fork: %w", err)
+	}
+	lg.Info("made bucket fork", "source", *bucket, "dest", sessBucket)
+
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		withForce := func(opts *s3.Options) {
+			opts.APIOptions = append(opts.APIOptions, smithyhttp.AddHeaderValue("Tigris-Force-Delete", "true"))
+		}
+
+		if _, err := client.DeleteBucket(ctx, &s3.DeleteBucketInput{
+			Bucket: new(sessBucket),
+		}, withForce); err != nil {
+			lg.Error("can't delete session bucket", "err", err)
+		}
+	}()
+
+	fsys, err := s3fs.NewS3FS(client.Client, sessBucket)
+	if err != nil {
+		return fmt.Errorf("can't setup s3fs: %w", err)
+	}
 
 	t := term.NewTerminal(sess, "$ ")
 

@@ -6,10 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
+	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 	"github.com/go-git/go-billy/v5"
 )
 
@@ -70,7 +74,51 @@ func (fs3 *S3FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.Fi
 
 // Stat returns a FileInfo describing the named file.
 func (fs3 *S3FS) Stat(filename string) (os.FileInfo, error) {
-	return nil, errors.New("not implemented")
+	key := strings.TrimPrefix(fs3.cleanPath(filename), "/")
+	if key == "" || key == "." {
+		return newDirInfo("/"), nil
+	}
+
+	ctx := context.TODO()
+
+	head, err := fs3.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &fs3.bucket,
+		Key:    &key,
+	})
+	if err == nil {
+		return newFileInfo(
+			path.Base(key),
+			aws.ToInt64(head.ContentLength),
+			aws.ToTime(head.LastModified),
+		), nil
+	}
+
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return nil, err
+	}
+	switch apiErr.ErrorCode() {
+	case "NotFound", "NoSuchKey":
+		// fall through to directory probe below
+	default:
+		return nil, err
+	}
+
+	prefix := key + "/"
+	maxKeys := int32(1)
+	list, lerr := fs3.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:    &fs3.bucket,
+		Prefix:    &prefix,
+		Delimiter: &fs3.separator,
+		MaxKeys:   &maxKeys,
+	})
+	if lerr != nil {
+		return nil, lerr
+	}
+	if len(list.Contents) > 0 || len(list.CommonPrefixes) > 0 {
+		return newDirInfo(path.Base(key)), nil
+	}
+	return nil, &os.PathError{Op: "stat", Path: filename, Err: fs.ErrNotExist}
 }
 
 // Rename renames (moves) oldpath to newpath. If newpath already exists and
