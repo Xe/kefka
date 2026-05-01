@@ -1,3 +1,23 @@
+// Package tr implements the tr coreutil for kefka.
+//
+// kefka aims for GNU-coreutils compatibility, not strict POSIX. Several
+// constructs are deliberately implemented as a GNU-subset rather than a
+// fully LC_COLLATE/LC_CTYPE-aware implementation:
+//
+//   - [=c=] equivalence classes match only the character c itself. GNU
+//     coreutils itself only treats characters as equivalent to themselves
+//     in the C locale (and in practice in any locale, because no system
+//     locale defines real equivalence classes). This matches that
+//     behaviour without consulting the locale at all.
+//   - -C ("complement by character") is treated identically to -c
+//     ("complement by byte value"). kefka does not maintain a separate
+//     LC_CTYPE-aware character set, so the two are equivalent for our
+//     purposes.
+//   - [:class:] character classes are populated using Go's unicode
+//     package over the ASCII range [0, 0x80). This matches the behaviour
+//     of GNU tr in the C locale (which is what kefka effectively is).
+//   - Character ranges (a-z) are byte-based. GNU tr is also byte-based
+//     by default in the C locale.
 package tr
 
 import (
@@ -6,7 +26,9 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/pborman/getopt/v2"
 	"mvdan.cc/sh/v3/interp"
@@ -42,20 +64,31 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 		fmt.Fprint(stderr, "  -s, --squeeze-repeats  squeeze repeated characters\n")
 		fmt.Fprint(stderr, "      --help             display this help and exit\n\n")
 		fmt.Fprint(stderr, "SET syntax:\n")
-		fmt.Fprint(stderr, "  a-z         character range\n")
+		fmt.Fprint(stderr, "  \\NNN        character with octal value NNN (1 to 3 octal digits)\n")
+		fmt.Fprint(stderr, "  \\\\          backslash\n")
+		fmt.Fprint(stderr, "  \\a          audible BEL\n")
+		fmt.Fprint(stderr, "  \\b          backspace\n")
+		fmt.Fprint(stderr, "  \\f          form feed\n")
+		fmt.Fprint(stderr, "  \\n          new line\n")
+		fmt.Fprint(stderr, "  \\r          return\n")
+		fmt.Fprint(stderr, "  \\t          horizontal tab\n")
+		fmt.Fprint(stderr, "  \\v          vertical tab\n")
+		fmt.Fprint(stderr, "  CHAR1-CHAR2 all characters from CHAR1 to CHAR2 in ascending order\n")
+		fmt.Fprint(stderr, "  [CHAR*]     in SET2, copies of CHAR until length of SET1\n")
+		fmt.Fprint(stderr, "  [CHAR*REPEAT] REPEAT copies of CHAR, REPEAT octal if starting with 0\n")
 		fmt.Fprint(stderr, "  [:alnum:]   all letters and digits\n")
 		fmt.Fprint(stderr, "  [:alpha:]   all letters\n")
-		fmt.Fprint(stderr, "  [:digit:]   all digits\n")
-		fmt.Fprint(stderr, "  [:lower:]   all lowercase letters\n")
-		fmt.Fprint(stderr, "  [:upper:]   all uppercase letters\n")
-		fmt.Fprint(stderr, "  [:space:]   all whitespace\n")
-		fmt.Fprint(stderr, "  [:blank:]   horizontal whitespace\n")
-		fmt.Fprint(stderr, "  [:punct:]   all punctuation\n")
-		fmt.Fprint(stderr, "  [:print:]   all printable characters\n")
-		fmt.Fprint(stderr, "  [:graph:]   all printable characters except space\n")
+		fmt.Fprint(stderr, "  [:blank:]   all horizontal whitespace\n")
 		fmt.Fprint(stderr, "  [:cntrl:]   all control characters\n")
+		fmt.Fprint(stderr, "  [:digit:]   all digits\n")
+		fmt.Fprint(stderr, "  [:graph:]   all printable characters, not including space\n")
+		fmt.Fprint(stderr, "  [:lower:]   all lower case letters\n")
+		fmt.Fprint(stderr, "  [:print:]   all printable characters, including space\n")
+		fmt.Fprint(stderr, "  [:punct:]   all punctuation characters\n")
+		fmt.Fprint(stderr, "  [:space:]   all horizontal or vertical whitespace\n")
+		fmt.Fprint(stderr, "  [:upper:]   all upper case letters\n")
 		fmt.Fprint(stderr, "  [:xdigit:]  all hexadecimal digits\n")
-		fmt.Fprint(stderr, "  \\n, \\t, \\r  escape sequences\n")
+		fmt.Fprint(stderr, "  [=CHAR=]    all characters which are equivalent to CHAR\n")
 	}
 	set.SetUsage(usage)
 
@@ -89,14 +122,14 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 		return interp.ExitStatus(1)
 	}
 
-	set1, err := expandSet(sets[0])
+	set1, err := expandSet1(sets[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "%s\n", err)
 		return interp.ExitStatus(1)
 	}
 	var set2 []rune
 	if len(sets) > 1 {
-		set2, err = expandSet(sets[1])
+		set2, err = expandSet2(sets[1], len(set1))
 		if err != nil {
 			fmt.Fprintf(stderr, "%s\n", err)
 			return interp.ExitStatus(1)
@@ -203,91 +236,317 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 	return nil
 }
 
-var posixClasses = []struct {
-	name  string
-	chars string
-}{
-	{"[:alnum:]", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"},
-	{"[:alpha:]", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"},
-	{"[:blank:]", " \t"},
-	{"[:cntrl:]", buildCntrl()},
-	{"[:digit:]", "0123456789"},
-	{"[:graph:]", buildRange(33, 126)},
-	{"[:lower:]", "abcdefghijklmnopqrstuvwxyz"},
-	{"[:print:]", buildRange(32, 126)},
-	{"[:punct:]", "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"},
-	{"[:space:]", " \t\n\r\f\v"},
-	{"[:upper:]", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
-	{"[:xdigit:]", "0123456789ABCDEFabcdef"},
+type classDef struct {
+	name string
+	in   func(rune) bool
 }
 
-func buildRange(lo, hi int) string {
-	var b strings.Builder
-	for c := lo; c <= hi; c++ {
-		b.WriteByte(byte(c))
+var posixClasses = []classDef{
+	{"alnum", func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }},
+	{"alpha", unicode.IsLetter},
+	{"blank", func(r rune) bool { return r == ' ' || r == '\t' }},
+	{"cntrl", unicode.IsControl},
+	{"digit", unicode.IsDigit},
+	{"graph", func(r rune) bool { return unicode.IsPrint(r) && r != ' ' }},
+	{"lower", unicode.IsLower},
+	{"print", unicode.IsPrint},
+	{"punct", unicode.IsPunct},
+	{"space", unicode.IsSpace},
+	{"upper", unicode.IsUpper},
+	{"xdigit", func(r rune) bool {
+		return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+	}},
+}
+
+func expandClass(name string) ([]rune, bool) {
+	for _, c := range posixClasses {
+		if c.name == name {
+			var out []rune
+			for r := rune(0); r < 0x80; r++ {
+				if c.in(r) {
+					out = append(out, r)
+				}
+			}
+			return out, true
+		}
 	}
-	return b.String()
+	return nil, false
 }
 
-func buildCntrl() string {
-	var b strings.Builder
-	for c := range 32 {
-		b.WriteByte(byte(c))
+// parseEscape reads one character from rs starting at i, applying backslash
+// escapes. It returns the rune, the number of input runes consumed, and any
+// error.
+func parseEscape(rs []rune, i int) (rune, int, error) {
+	if rs[i] != '\\' || i+1 >= len(rs) {
+		return rs[i], 1, nil
 	}
-	b.WriteByte(127)
-	return b.String()
+	c := rs[i+1]
+	switch c {
+	case '\\':
+		return '\\', 2, nil
+	case 'a':
+		return '\a', 2, nil
+	case 'b':
+		return '\b', 2, nil
+	case 'f':
+		return '\f', 2, nil
+	case 'n':
+		return '\n', 2, nil
+	case 'r':
+		return '\r', 2, nil
+	case 't':
+		return '\t', 2, nil
+	case 'v':
+		return '\v', 2, nil
+	}
+	if c >= '0' && c <= '7' {
+		end := i + 2
+		for end < len(rs) && end-(i+1) < 3 && rs[end] >= '0' && rs[end] <= '7' {
+			end++
+		}
+		v, err := strconv.ParseInt(string(rs[i+1:end]), 8, 32)
+		if err != nil {
+			return 0, 0, fmt.Errorf("tr: invalid octal escape: \\%s", string(rs[i+1:end]))
+		}
+		return rune(v), end - i, nil
+	}
+	return c, 2, nil
 }
 
-func expandSet(s string) ([]rune, error) {
+// matchClass returns the class name and consumed length if rs[i:] starts with
+// "[:class:]". Returns ok=false if not a class construct.
+func matchClass(rs []rune, i int) (string, int, bool) {
+	if i+1 >= len(rs) || rs[i] != '[' || rs[i+1] != ':' {
+		return "", 0, false
+	}
+	end := i + 2
+	for end < len(rs) && rs[end] != ':' {
+		end++
+	}
+	if end+1 >= len(rs) || rs[end] != ':' || rs[end+1] != ']' {
+		return "", 0, false
+	}
+	return string(rs[i+2 : end]), end + 2 - i, true
+}
+
+// matchEquiv returns the equiv rune and consumed length if rs[i:] starts with
+// "[=x=]". Returns ok=false if not an equivalence-class construct.
+func matchEquiv(rs []rune, i int) (rune, int, bool) {
+	if i+1 >= len(rs) || rs[i] != '[' || rs[i+1] != '=' {
+		return 0, 0, false
+	}
+	r, n, err := parseEscape(rs, i+2)
+	if err != nil {
+		return 0, 0, false
+	}
+	end := i + 2 + n
+	if end+1 >= len(rs) || rs[end] != '=' || rs[end+1] != ']' {
+		return 0, 0, false
+	}
+	return r, end + 2 - i, true
+}
+
+// matchRepeat returns the rune, count, count-omitted flag, and consumed length
+// if rs[i:] starts with "[x*]" or "[x*N]". Returns ok=false otherwise.
+func matchRepeat(rs []rune, i int) (rune, int, bool, int, bool) {
+	if rs[i] != '[' || i+1 >= len(rs) {
+		return 0, 0, false, 0, false
+	}
+	r, n, err := parseEscape(rs, i+1)
+	if err != nil {
+		return 0, 0, false, 0, false
+	}
+	pos := i + 1 + n
+	if pos >= len(rs) || rs[pos] != '*' {
+		return 0, 0, false, 0, false
+	}
+	pos++
+	digitsStart := pos
+	for pos < len(rs) && rs[pos] != ']' {
+		pos++
+	}
+	if pos >= len(rs) || rs[pos] != ']' {
+		return 0, 0, false, 0, false
+	}
+	digits := string(rs[digitsStart:pos])
+	if digits == "" {
+		return r, 0, true, pos + 1 - i, true
+	}
+	base := 10
+	if strings.HasPrefix(digits, "0") {
+		base = 8
+	}
+	count, err := strconv.ParseInt(digits, base, 64)
+	if err != nil || count < 0 {
+		return 0, 0, false, 0, false
+	}
+	if count == 0 {
+		return r, 0, true, pos + 1 - i, true
+	}
+	return r, int(count), false, pos + 1 - i, true
+}
+
+func expandSet1(s string) ([]rune, error) {
 	rs := []rune(s)
 	var out []rune
 	i := 0
 	for i < len(rs) {
-		if rs[i] == '[' && i+1 < len(rs) && rs[i+1] == ':' {
-			matched := false
-			for _, cls := range posixClasses {
-				if strings.HasPrefix(string(rs[i:]), cls.name) {
-					out = append(out, []rune(cls.chars)...)
-					i += len([]rune(cls.name))
-					matched = true
-					break
-				}
+		if name, n, ok := matchClass(rs, i); ok {
+			runes, found := expandClass(name)
+			if !found {
+				return nil, fmt.Errorf("tr: invalid character class %q", name)
 			}
-			if matched {
-				continue
-			}
-		}
-
-		if rs[i] == '\\' && i+1 < len(rs) {
-			switch rs[i+1] {
-			case 'n':
-				out = append(out, '\n')
-			case 't':
-				out = append(out, '\t')
-			case 'r':
-				out = append(out, '\r')
-			default:
-				out = append(out, rs[i+1])
-			}
-			i += 2
+			out = append(out, runes...)
+			i += n
 			continue
 		}
+		if r, n, ok := matchEquiv(rs, i); ok {
+			out = append(out, r)
+			i += n
+			continue
+		}
+		if _, _, _, n, ok := matchRepeat(rs, i); ok {
+			_ = n
+			return nil, errors.New("tr: the [c*] repeat construct may not appear in string1")
+		}
 
-		if i+2 < len(rs) && rs[i+1] == '-' {
-			start := rs[i]
-			end := rs[i+2]
-			if int(end)-int(start) > 65536 {
-				return nil, fmt.Errorf("tr: character range too large: '%c-%c'", start, end)
+		r, n, err := parseEscape(rs, i)
+		if err != nil {
+			return nil, err
+		}
+		nextStart := i + n
+
+		if nextStart < len(rs) && rs[nextStart] == '-' && nextStart+1 < len(rs) {
+			end, m, err := parseEscape(rs, nextStart+1)
+			if err != nil {
+				return nil, err
 			}
-			for c := start; c <= end; c++ {
+			if int(end)-int(r) > 65536 {
+				return nil, fmt.Errorf("tr: character range too large: '%c-%c'", r, end)
+			}
+			if end < r {
+				return nil, fmt.Errorf("tr: range-endpoints of '%c-%c' are in reverse collating sequence order", r, end)
+			}
+			for c := r; c <= end; c++ {
 				out = append(out, c)
 			}
-			i += 3
+			i = nextStart + 1 + m
 			continue
 		}
 
-		out = append(out, rs[i])
-		i++
+		out = append(out, r)
+		i = nextStart
 	}
 	return out, nil
+}
+
+func expandSet2(s string, set1Len int) ([]rune, error) {
+	rs := []rune(s)
+	var segments []segment
+	i := 0
+	for i < len(rs) {
+		if name, n, ok := matchClass(rs, i); ok {
+			runes, found := expandClass(name)
+			if !found {
+				return nil, fmt.Errorf("tr: invalid character class %q", name)
+			}
+			segments = append(segments, segment{runes: runes})
+			i += n
+			continue
+		}
+		if r, n, ok := matchEquiv(rs, i); ok {
+			segments = append(segments, segment{runes: []rune{r}})
+			i += n
+			continue
+		}
+		if r, count, omitted, n, ok := matchRepeat(rs, i); ok {
+			seg := segment{repeatRune: r, repeatCount: count, repeatPad: omitted}
+			segments = append(segments, seg)
+			i += n
+			continue
+		}
+
+		r, n, err := parseEscape(rs, i)
+		if err != nil {
+			return nil, err
+		}
+		nextStart := i + n
+
+		if nextStart < len(rs) && rs[nextStart] == '-' && nextStart+1 < len(rs) {
+			end, m, err := parseEscape(rs, nextStart+1)
+			if err != nil {
+				return nil, err
+			}
+			if int(end)-int(r) > 65536 {
+				return nil, fmt.Errorf("tr: character range too large: '%c-%c'", r, end)
+			}
+			if end < r {
+				return nil, fmt.Errorf("tr: range-endpoints of '%c-%c' are in reverse collating sequence order", r, end)
+			}
+			var rng []rune
+			for c := r; c <= end; c++ {
+				rng = append(rng, c)
+			}
+			segments = append(segments, segment{runes: rng})
+			i = nextStart + 1 + m
+			continue
+		}
+
+		segments = append(segments, segment{runes: []rune{r}})
+		i = nextStart
+	}
+
+	fixed := 0
+	pads := 0
+	for _, seg := range segments {
+		if seg.repeatPad {
+			pads++
+			continue
+		}
+		if seg.repeatCount > 0 {
+			fixed += seg.repeatCount
+			continue
+		}
+		fixed += len(seg.runes)
+	}
+
+	padTotal := 0
+	if pads > 0 && fixed < set1Len {
+		padTotal = set1Len - fixed
+	}
+	perPad := 0
+	extra := 0
+	if pads > 0 {
+		perPad = padTotal / pads
+		extra = padTotal % pads
+	}
+
+	var out []rune
+	for _, seg := range segments {
+		switch {
+		case seg.repeatPad:
+			n := perPad
+			if extra > 0 {
+				n++
+				extra--
+			}
+			for k := 0; k < n; k++ {
+				out = append(out, seg.repeatRune)
+			}
+		case seg.repeatCount > 0:
+			for k := 0; k < seg.repeatCount; k++ {
+				out = append(out, seg.repeatRune)
+			}
+		default:
+			out = append(out, seg.runes...)
+		}
+	}
+	return out, nil
+}
+
+type segment struct {
+	runes       []rune
+	repeatRune  rune
+	repeatCount int
+	repeatPad   bool
 }
