@@ -16,7 +16,7 @@ import (
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/util"
-	"github.com/spf13/pflag"
+	"github.com/pborman/getopt/v2"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
 )
@@ -31,41 +31,59 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		return errors.New("ls: ExecContext has no filesystem")
 	}
 
-	var (
-		showAll       bool
-		showAlmostAll bool
-		longFormat    bool
-		humanReadable bool
-		recursive     bool
-		reverse       bool
-		sortBySize    bool
-		classifyFiles bool
-		directoryOnly bool
-		sortByTime    bool
-		onePerLine    bool
-	)
+	stderr := ec.Stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
 
-	flagSet := pflag.NewFlagSet("ls", pflag.ContinueOnError)
-	flagSet.SetOutput(ec.Stderr)
-	flagSet.BoolVarP(&showAll, "all", "a", false, "do not ignore entries starting with .")
-	flagSet.BoolVarP(&showAlmostAll, "almost-all", "A", false, "do not list . and ..")
-	flagSet.BoolVarP(&longFormat, "long", "l", false, "use a long listing format")
-	flagSet.BoolVarP(&humanReadable, "human-readable", "h", false, "with -l, print sizes like 1K 234M 2G etc.")
-	flagSet.BoolVarP(&recursive, "recursive", "R", false, "list subdirectories recursively")
-	flagSet.BoolVarP(&reverse, "reverse", "r", false, "reverse order while sorting")
-	flagSet.BoolVarP(&sortBySize, "sort-size", "S", false, "sort by file size, largest first")
-	flagSet.BoolVarP(&classifyFiles, "classify", "F", false, "append indicator (one of */=>@) to entries")
-	flagSet.BoolVarP(&directoryOnly, "directory", "d", false, "list directories themselves, not their contents")
-	flagSet.BoolVarP(&sortByTime, "sort-time", "t", false, "sort by time, newest first")
-	flagSet.BoolVarP(&onePerLine, "one-per-line", "1", false, "list one file per line")
+	set := getopt.New()
+	set.SetProgram("ls")
+	set.SetParameters("[FILE]...")
 
-	if err := flagSet.Parse(args); err != nil {
-		return errors.Join(err, interp.ExitStatus(2))
+	usage := func() {
+		fmt.Fprint(stderr, "Usage: ls [OPTION]... [FILE]...\n")
+		fmt.Fprint(stderr, "list directory contents\n\n")
+		fmt.Fprint(stderr, "  -a, --all            do not ignore entries starting with .\n")
+		fmt.Fprint(stderr, "  -A, --almost-all     do not list . and ..\n")
+		fmt.Fprint(stderr, "  -d, --directory      list directories themselves, not their contents\n")
+		fmt.Fprint(stderr, "  -F, --classify       append indicator (one of */=>@) to entries\n")
+		fmt.Fprint(stderr, "  -h, --human-readable with -l, print sizes like 1K 234M 2G etc.\n")
+		fmt.Fprint(stderr, "  -l                   use a long listing format\n")
+		fmt.Fprint(stderr, "  -r, --reverse        reverse order while sorting\n")
+		fmt.Fprint(stderr, "  -R, --recursive      list subdirectories recursively\n")
+		fmt.Fprint(stderr, "  -S                   sort by file size, largest first\n")
+		fmt.Fprint(stderr, "  -t                   sort by time, newest first\n")
+		fmt.Fprint(stderr, "  -1                   list one file per line\n")
+		fmt.Fprint(stderr, "      --help           display this help and exit\n")
+	}
+	set.SetUsage(usage)
+
+	showAll := set.BoolLong("all", 'a', "do not ignore entries starting with .")
+	showAlmostAll := set.BoolLong("almost-all", 'A', "do not list . and ..")
+	directoryOnly := set.BoolLong("directory", 'd', "list directories themselves, not their contents")
+	classifyFiles := set.BoolLong("classify", 'F', "append indicator (one of */=>@) to entries")
+	humanReadable := set.BoolLong("human-readable", 'h', "with -l, print sizes like 1K 234M 2G etc.")
+	longFormat := set.Bool('l', "use a long listing format")
+	reverse := set.BoolLong("reverse", 'r', "reverse order while sorting")
+	recursive := set.BoolLong("recursive", 'R', "list subdirectories recursively")
+	sortBySize := set.Bool('S', "sort by file size, largest first")
+	sortByTime := set.Bool('t', "sort by time, newest first")
+	onePerLine := set.Bool('1', "list one file per line")
+	help := set.BoolLong("help", 0, "display this help and exit")
+
+	if err := set.Getopt(append([]string{"ls"}, args...), nil); err != nil {
+		fmt.Fprintf(stderr, "ls: %s\n", err)
+		usage()
+		return interp.ExitStatus(2)
+	}
+	if *help {
+		usage()
+		return nil
 	}
 	_ = sortByTime
 	_ = onePerLine
 
-	paths := flagSet.Args()
+	paths := set.Args()
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
@@ -86,12 +104,12 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		)
 
 		switch {
-		case directoryOnly:
-			out, errS, code = listDirectoryEntry(ec, p, longFormat, humanReadable, classifyFiles)
+		case *directoryOnly:
+			out, errS, code = listDirectoryEntry(ec, p, *longFormat, *humanReadable, *classifyFiles)
 		case strings.ContainsAny(p, "*?["):
-			out, errS, code = listGlob(ec, p, showAll, showAlmostAll, longFormat, reverse, humanReadable, sortBySize, classifyFiles)
+			out, errS, code = listGlob(ec, p, *showAll, *showAlmostAll, *longFormat, *reverse, *humanReadable, *sortBySize, *classifyFiles)
 		default:
-			out, errS, code = listPath(ctx, ec, p, showAll, showAlmostAll, longFormat, recursive, showHeader, reverse, humanReadable, sortBySize, classifyFiles)
+			out, errS, code = listPath(ctx, ec, p, *showAll, *showAlmostAll, *longFormat, *recursive, showHeader, *reverse, *humanReadable, *sortBySize, *classifyFiles)
 		}
 
 		stdoutBuf.WriteString(out)

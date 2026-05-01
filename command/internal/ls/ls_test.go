@@ -184,9 +184,15 @@ func TestExec(t *testing.T) {
 			wantStdout: "deeper\ninner.txt\n",
 		},
 		{
-			name:    "unknown flag returns error",
-			args:    []string{"--no-such-flag"},
-			wantErr: true,
+			name:       "unknown flag returns error",
+			args:       []string{"--no-such-flag"},
+			wantStderr: "ls: unknown option: --no-such-flag\nUsage: ls [OPTION]... [FILE]...\nlist directory contents\n\n  -a, --all            do not ignore entries starting with .\n  -A, --almost-all     do not list . and ..\n  -d, --directory      list directories themselves, not their contents\n  -F, --classify       append indicator (one of */=>@) to entries\n  -h, --human-readable with -l, print sizes like 1K 234M 2G etc.\n  -l                   use a long listing format\n  -r, --reverse        reverse order while sorting\n  -R, --recursive      list subdirectories recursively\n  -S                   sort by file size, largest first\n  -t                   sort by time, newest first\n  -1                   list one file per line\n      --help           display this help and exit\n",
+			wantErr:    true,
+		},
+		{
+			name:       "help prints usage to stderr",
+			args:       []string{"--help"},
+			wantStderr: "Usage: ls [OPTION]... [FILE]...\nlist directory contents\n\n  -a, --all            do not ignore entries starting with .\n  -A, --almost-all     do not list . and ..\n  -d, --directory      list directories themselves, not their contents\n  -F, --classify       append indicator (one of */=>@) to entries\n  -h, --human-readable with -l, print sizes like 1K 234M 2G etc.\n  -l                   use a long listing format\n  -r, --reverse        reverse order while sorting\n  -R, --recursive      list subdirectories recursively\n  -S                   sort by file size, largest first\n  -t                   sort by time, newest first\n  -1                   list one file per line\n      --help           display this help and exit\n",
 		},
 	}
 
