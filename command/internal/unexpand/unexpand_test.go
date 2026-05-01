@@ -189,6 +189,131 @@ func TestUnexpand(t *testing.T) {
 			args:    []string{"--no-such-flag"},
 			wantErr: true,
 		},
+		{
+			name:       "-t implies -a (interior runs converted)",
+			args:       []string{"-t", "4"},
+			stdin:      "    a    b    c\n",
+			wantStdout: "\ta\t b\t  c\n",
+		},
+		{
+			name:       "-t implies -a long flag",
+			args:       []string{"--tabs=4"},
+			stdin:      "a   b\n",
+			wantStdout: "a\tb\n",
+		},
+		{
+			name:       "multi tab stops do not convert past last stop",
+			args:       []string{"-a", "-t", "4,8"},
+			stdin:      "            x\n",
+			wantStdout: "\t\t    x\n",
+		},
+		{
+			name:       "multi tab stops boundary at last stop",
+			args:       []string{"-a", "-t", "4,8"},
+			stdin:      "        x\n",
+			wantStdout: "\t\tx\n",
+		},
+		{
+			name:       "multi tab stops past last stop after non-blank",
+			args:       []string{"-a", "-t", "4,8"},
+			stdin:      "a       b   c\n",
+			wantStdout: "a\t\tb   c\n",
+		},
+		{
+			name:       "leading backspaces do not crash and disable leading conversion",
+			args:       nil,
+			stdin:      "\b\b\b   a\n",
+			wantStdout: "\b\b\b   a\n",
+		},
+		{
+			name:       "backspace decrements column for tab calculation",
+			args:       []string{"-a", "-t", "4"},
+			stdin:      "   \b   x\n",
+			wantStdout: "   \b\t x\n",
+		},
+		{
+			name:       "many backspaces do not underflow column",
+			args:       []string{"-a"},
+			stdin:      "a\b\b\b\b\b\b\b\b\b\b        b\n",
+			wantStdout: "a\b\b\b\b\b\b\b\b\b\b\tb\n",
+		},
+		{
+			// Audit example: -t implies -a even after non-blanks.
+			name:       "audit example: -t 4 converts every quad on whole line",
+			args:       []string{"-t", "4"},
+			stdin:      "    a    b    c\n",
+			wantStdout: "\ta\t b\t  c\n",
+		},
+		{
+			// Audit example: beyond-last-stop trailing spaces left untouched.
+			name:       "audit example: beyond_last_stop spaces past 4",
+			args:       []string{"-a", "-t", "4"},
+			stdin:      "beyond_last_stop spaces past 4\n",
+			wantStdout: "beyond_last_stop spaces past 4\n",
+		},
+		{
+			// With single tab spec, conversions continue to repeat past the
+			// "last" stop (the tab spec defines a repeating interval).
+			name:       "single tab spec keeps converting past nominal last stop",
+			args:       []string{"-a", "-t", "4"},
+			stdin:      "a   b   c\n",
+			wantStdout: "a\tb\tc\n",
+		},
+		{
+			// Backspace at column 1 must not decrement below 1 (GNU rule).
+			name:       "backspace at start does not underflow",
+			args:       []string{"-a", "-t", "4"},
+			stdin:      "\b    x\n",
+			wantStdout: "\b\tx\n",
+		},
+		{
+			// Multibyte runes: GNU unexpand is byte-based; we count one
+			// column per rune, which is consistent for ASCII input. A leading
+			// quad of spaces followed by a multibyte char still tabifies.
+			name:       "multibyte rune after leading tab-quad",
+			args:       []string{"-t", "4"},
+			stdin:      "    é\n",
+			wantStdout: "\té\n",
+		},
+		{
+			// Multibyte rune occupies one column for tab calculations: a
+			// rune followed by 3 spaces fills column 4, so converts to tab.
+			name:       "multibyte rune counts as one column",
+			args:       []string{"-a", "-t", "4"},
+			stdin:      "é   x\n",
+			wantStdout: "é\tx\n",
+		},
+		{
+			// Per GNU/POSIX: non-leading single space never converts
+			// to tab even when it lands on a tab stop.
+			name:       "interior single space at tab stop is not converted",
+			args:       []string{"-a", "-t", "4"},
+			stdin:      "aaa b\n",
+			wantStdout: "aaa b\n",
+		},
+		{
+			// Two interior spaces ending on a tab stop do convert.
+			name:       "interior two-space run ending on tab stop converts",
+			args:       []string{"-a", "-t", "4"},
+			stdin:      "aa  b\n",
+			wantStdout: "aa\tb\n",
+		},
+		{
+			// East Asian wide chars occupy two columns: a wide rune
+			// fills cols 1-2, then 2 spaces at cols 3-4 hit tab stop 4.
+			name:       "wide character counts as two columns",
+			args:       []string{"-a", "-t", "4"},
+			stdin:      "中  x\n",
+			wantStdout: "中\tx\n",
+		},
+		{
+			// Two wide chars fill cols 1-4, hitting tab stop 4 already;
+			// leading 4 spaces convert to a tab independently.
+			name:       "leading tab then wide chars",
+			args:       []string{"-t", "4"},
+			stdin:      "    中文\n",
+			wantStdout: "\t中文\n",
+		},
 	}
 
 	for _, tt := range tests {

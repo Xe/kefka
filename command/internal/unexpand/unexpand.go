@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/pborman/getopt/v2"
+	"golang.org/x/text/width"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
 )
@@ -65,6 +66,8 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		return interp.ExitStatus(1)
 	}
 
+	convertAll := *allBlanks || set.IsSet("tabs")
+
 	files := set.Args()
 
 	var output strings.Builder
@@ -74,7 +77,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		if err != nil {
 			return err
 		}
-		output.WriteString(processContent(content, tabStops, *allBlanks))
+		output.WriteString(processContent(content, tabStops, convertAll))
 	} else {
 		for _, file := range files {
 			content, err := readFile(ec, file, stderr)
@@ -82,7 +85,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 				execErr = err
 				break
 			}
-			output.WriteString(processContent(content, tabStops, *allBlanks))
+			output.WriteString(processContent(content, tabStops, convertAll))
 		}
 	}
 
@@ -118,6 +121,22 @@ func getNextTabStop(column int, tabStops []int) int {
 			return stop
 		}
 	}
+	return -1
+}
+
+func runeWidth(r rune) int {
+	switch width.LookupRune(r).Kind() {
+	case width.EastAsianWide, width.EastAsianFullwidth:
+		return 2
+	}
+	return 1
+}
+
+func tabAdvance(column int, tabStops []int) int {
+	next := getNextTabStop(column, tabStops)
+	if next > column {
+		return next
+	}
 	if len(tabStops) >= 2 {
 		last := tabStops[len(tabStops)-1]
 		prev := tabStops[len(tabStops)-2]
@@ -125,7 +144,7 @@ func getNextTabStop(column int, tabStops []int) int {
 		steps := (column-last)/interval + 1
 		return last + steps*interval
 	}
-	return -1
+	return column + 1
 }
 
 func unexpandLine(line string, tabStops []int, allBlanks bool) string {
@@ -147,10 +166,20 @@ func unexpandLine(line string, tabStops []int, allBlanks bool) string {
 			spaceRun = 0
 			return
 		}
+		// Per GNU and POSIX -a: only sequences of two or more blanks
+		// immediately preceding a tab stop convert in non-leading runs.
+		// Leading runs (any size) may still convert.
+		if !inLeading && spaceRun < 2 {
+			for range spaceRun {
+				result.WriteByte(' ')
+			}
+			spaceRun = 0
+			return
+		}
 		currentPos := spaceRunStart
 		for currentPos < endColumn {
 			nextStop := getNextTabStop(currentPos, tabStops)
-			if nextStop <= endColumn && nextStop > currentPos {
+			if nextStop > 0 && nextStop <= endColumn && nextStop > currentPos {
 				result.WriteByte('\t')
 				currentPos = nextStop
 				continue
@@ -175,11 +204,18 @@ func unexpandLine(line string, tabStops []int, allBlanks bool) string {
 		case '\t':
 			flushSpaces()
 			result.WriteByte('\t')
-			column = getNextTabStop(column, tabStops)
+			column = tabAdvance(column, tabStops)
+		case '\b':
+			flushSpaces()
+			result.WriteByte('\b')
+			if column > 0 {
+				column--
+			}
+			inLeading = false
 		default:
 			flushSpaces()
 			result.WriteRune(r)
-			column++
+			column += runeWidth(r)
 			inLeading = false
 		}
 	}
