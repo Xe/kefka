@@ -15,6 +15,7 @@ type ExecContext struct {
     Dir            string          // fsys-relative pwd
     Environ        expand.Environ  // mvdan.cc/sh/v3/expand
     FS             billy.Filesystem
+    Runner         *interp.Runner  // active shell runner; may be nil
 }
 
 type Execer interface {
@@ -25,6 +26,68 @@ type Execer interface {
 `args` is **already stripped of `argv[0]`** — the registry has split
 the command name off before calling `Exec`. Never assume `args[0]` is
 the command name.
+
+## ec.Runner — re-entering the shell
+
+Most ports never touch `ec.Runner`. It exists for the rare command
+that needs to dispatch a *child argv* through the shell itself —
+`time CMD`, `nice CMD`, `xargs CMD ...` — so the inner call goes
+through the same exec-handler chain (registered builtins, shell
+functions, PATH binaries) that the user would have hit by typing CMD
+directly.
+
+If you're porting one of those: shell-quote the inner argv, parse it
+as bash, run it through a subshell, and propagate the exit. Pattern
+(see `command/internal/time/time.go` for the live version):
+
+```go
+import (
+    "mvdan.cc/sh/v3/interp"
+    "mvdan.cc/sh/v3/syntax"
+)
+
+if ec.Runner == nil {
+    fmt.Fprint(ec.Stderr, "<name>: exec not available\n")
+    return interp.ExitStatus(127)
+}
+
+var b strings.Builder
+for i, a := range innerArgs {
+    if i > 0 {
+        b.WriteByte(' ')
+    }
+    q, err := syntax.Quote(a, syntax.LangBash)
+    if err != nil {
+        return interp.ExitStatus(1)
+    }
+    b.WriteString(q)
+}
+prog, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).
+    Parse(strings.NewReader(b.String()), "<<name>>")
+if err != nil {
+    return interp.ExitStatus(1)
+}
+sub := ec.Runner.Subshell()
+interp.StdIO(ec.Stdin, ec.Stdout, ec.Stderr)(sub)
+return sub.Run(ctx, prog)
+```
+
+Notes:
+
+- **Do not** stash the registry on your `Impl` and call `reg.Get`
+  yourself. That bypasses shell functions and the call/exec handler
+  chain.
+- Tests for runner-using commands need a real `*interp.Runner` whose
+  `ExecHandler` dispatches into a `registry.Impl`. See
+  `command/internal/time/time_test.go` (`newRunner` helper) for the
+  pattern.
+- `ec.Runner` may be `nil` (embedders or older test harnesses). Guard
+  with a `127 + "exec not available"` short-circuit, matching `time`.
+- Inside the subshell, the registry's "command not found" surfaces
+  as `kefka: command not found: <NAME>` plus
+  `errors.Join(interp.ExitStatus(127), registry.ErrCommandNotFound)`
+  — match against `registry.ErrCommandNotFound` if you need to
+  distinguish it from other 127s.
 
 ## Filesystem
 

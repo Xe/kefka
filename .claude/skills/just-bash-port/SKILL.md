@@ -29,7 +29,9 @@ and contain the surface-area knowledge needed to make safe choices:
 
 - [references/execer-surface.md](references/execer-surface.md) — `command.Execer`
   interface, `ExecContext` fields, exit-code conventions, the billy filesystem,
-  and the path-resolution helper used across kefka commands.
+  the path-resolution helper used across kefka commands, and the
+  `ec.Runner` subshell pattern for commands that re-dispatch a child
+  argv (e.g. `time`, `nice`, `xargs`).
 - [references/getopt-v2.md](references/getopt-v2.md) — how to wire
   `pborman/getopt/v2`, how to set the usage line, how to expose `--help`,
   and how to map TypeScript `parseArgs` flag definitions onto getopt
