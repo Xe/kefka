@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -10,6 +11,10 @@ import (
 	"github.com/go-git/go-billy/v5"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
+)
+
+var (
+	ErrCommandNotFound = errors.New("registry: command not found")
 )
 
 type Impl struct {
@@ -99,7 +104,7 @@ func (i *Impl) Exec(ctx context.Context, fsys billy.Filesystem, runner *interp.R
 	cmd, ok := i.Get(cmdName)
 	if !ok {
 		fmt.Fprintf(hc.Stderr, "kefka: command not found: %s\n", cmdName)
-		return interp.ExitStatus(127)
+		return errors.Join(interp.ExitStatus(127), ErrCommandNotFound)
 	}
 
 	return cmd.Exec(ctx, &command.ExecContext{
