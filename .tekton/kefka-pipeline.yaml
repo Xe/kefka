@@ -20,27 +20,27 @@ spec:
       description: |
         Cloned repo files.
   tasks:
-    - name: fetch-source
-      taskRef:
-        name: git-clone
-      workspaces:
-        - name: output
-          workspace: repo-data
+    - name: clone-repo
+      taskSpec:
+        params:
+          - name: "url"
+            description: "repository URL to clone"
+          - name: "commit"
+            description: "repository commit to check out"
+        steps:
+          - name: git-clone
+            image: reg.xeiaso.net/xe/x/git:latest
+            script: |
+              set -euo pipefail
+              git clone $(params.url) /workspace/repo-data
+              cd /workspace/repo-data
+              git checkout $(params.commit)
+        workspaces:
+          - name: "repo-data"
+            description: "Repository data for other steps in the pipeline"
+            mountPath: "/workspace/repo-data"
       params:
         - name: url
           value: $(params.repo-url)
         - name: revision
           value: $(params.commit)
-    - name: go-test
-      taskRef:
-        name: golang-test
-      workspaces:
-        - name: source
-          workspace: repo-data
-      params:
-        - name: package
-          value: "tangled.org/xeiaso.net/kefka"
-        - name: "packages"
-          value: "./..."
-        - name: "version"
-          value: "1.26"
