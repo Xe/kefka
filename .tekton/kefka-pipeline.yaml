@@ -9,7 +9,8 @@ spec:
       storage: 16Gi
   volumeMode: Filesystem
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
+  storageClassName: itsuki
 ---
 apiVersion: tekton.dev/v1beta1
 kind: Pipeline
