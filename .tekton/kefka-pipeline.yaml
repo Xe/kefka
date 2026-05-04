@@ -1,0 +1,40 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: kefka-build-test
+  namespace: ci
+
+spec:
+  description: |
+    The CI pass for Kefka including Go tests and linting.
+  params:
+    - name: repo-url
+      type: string
+      description: "Git repo to clone"
+  workspaces:
+    - name: repo-data
+      description: |
+        Cloned repo files.
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+      workspaces:
+        - name: output
+          workspace: repo-data
+      params:
+        - name: url
+          value: $(params.repo-url)
+    - name: go-test
+      taskRef:
+        name: golang-test
+      workspaces:
+        - name: source
+          workspace: repo-data
+      params:
+        - name: package
+          value: "tangled.org/xeiaso.net/kefka"
+        - name: "packages"
+          value: "./..."
+        - name: "version"
+          value: "1.26"

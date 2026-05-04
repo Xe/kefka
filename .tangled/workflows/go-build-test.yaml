@@ -1,0 +1,11 @@
+when:
+  - event: ["push"]
+    branch: ["main"]
+  - event: ["pull_request"]
+    branch: ["main"]
+
+engine: nixery
+
+tack:
+  tekton:
+    pipeline: kefka-build-test
