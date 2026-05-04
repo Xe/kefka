@@ -9,3 +9,7 @@ engine: nixery
 tack:
   tekton:
     pipeline: kefka-build-test
+    workspaces:
+      - name: repo-data
+        accessModes: ["ReadWriteOnce"]
+        storage: 1Gi
