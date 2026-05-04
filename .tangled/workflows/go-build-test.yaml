@@ -11,5 +11,5 @@ tack:
     pipeline: kefka-build-test
     workspaces:
       - name: repo-data
-        accessModes: ["ReadWriteOnce"]
+        access_modes: ["ReadWriteOnce"]
         storage: 1Gi
