@@ -12,6 +12,9 @@ spec:
       type: string
       description: "Git repo to clone"
       default: "https://tangled.org/xeiaso.net/kefka"
+    - name: "commit"
+      type: string
+      description: "Git revision to check out"
   workspaces:
     - name: repo-data
       description: |
@@ -26,6 +29,8 @@ spec:
       params:
         - name: url
           value: $(params.repo-url)
+        - name: revision
+          value: $(params.commit)
     - name: go-test
       taskRef:
         name: golang-test
