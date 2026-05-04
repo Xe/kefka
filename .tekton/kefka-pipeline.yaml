@@ -54,15 +54,10 @@ spec:
             description: "path to source code"
             default: "/workspace/repo-data/repo"
         steps:
-          - name: go-mod-download
-            image: golang:1.26
-            script: |
-              cd $(params.folder)
-              go mod download
           - name: run-tests
             image: golang:1.26
+            workingDir: $(params.folder)
             script: |
-              cd $(params.folder)
               go test ./...
         workspaces:
           - name: "repo-data"
