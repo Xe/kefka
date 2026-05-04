@@ -68,3 +68,6 @@ spec:
           - name: "repo-data"
             description: "Repository data for other steps in the pipeline"
             mountPath: "/workspace/repo-data"
+      workspaces:
+        - name: repo-data
+          workspace: repo-data
