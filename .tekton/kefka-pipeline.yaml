@@ -32,8 +32,8 @@ spec:
             image: reg.xeiaso.net/xe/x/git:latest
             script: |
               set -euo pipefail
-              git clone $(params.url) /workspace/repo-data
-              cd /workspace/repo-data
+              git clone $(params.url) /workspace/repo-data/repo
+              cd /workspace/repo-data/repo
               git checkout $(params.commit)
         workspaces:
           - name: "repo-data"
