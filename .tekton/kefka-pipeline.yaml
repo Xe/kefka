@@ -1,3 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: go-mod-cache
+  namespace: ci
+spec:
+  resources:
+    requests:
+      storage: 16Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+---
 apiVersion: tekton.dev/v1beta1
 kind: Pipeline
 metadata:
@@ -19,6 +32,9 @@ spec:
     - name: repo-data
       description: |
         Cloned repo files.
+    - name: go-mod-cache
+      description: |
+        Go module cache
   tasks:
     - name: clone-repo
       taskSpec:
@@ -58,12 +74,20 @@ spec:
           - name: run-tests
             image: golang:1.26
             workingDir: $(params.folder)
+            env:
+              - name: "GOPATH"
+                value: "/go"
             script: |
               go test ./...
         workspaces:
           - name: "repo-data"
             description: "Repository data for other steps in the pipeline"
             mountPath: "/workspace/repo-data"
+          - name: "go-mod-cache"
+            description: "Go module cache"
+            mountPath: "/go"
       workspaces:
         - name: repo-data
           workspace: repo-data
+        - name: go-mod-cache
+          workspace: go-mod-cache

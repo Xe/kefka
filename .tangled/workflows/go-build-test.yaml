@@ -13,3 +13,5 @@ tack:
       - name: repo-data
         access_modes: ["ReadWriteOnce"]
         storage: 1Gi
+      - name: go-mod-cache
+        pvc: go-mod-cache
