@@ -48,6 +48,7 @@ spec:
         - name: commit
           value: $(params.commit)
     - name: go-test
+      runAfter: ["clone-repo"]
       taskSpec:
         params:
           - name: "folder"
