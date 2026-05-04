@@ -11,6 +11,7 @@ spec:
     - name: repo-url
       type: string
       description: "Git repo to clone"
+      default: "https://tangled.org/xeiaso.net/kefka"
   workspaces:
     - name: repo-data
       description: |
