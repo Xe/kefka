@@ -42,5 +42,5 @@ spec:
       params:
         - name: url
           value: $(params.repo-url)
-        - name: revision
+        - name: commit
           value: $(params.commit)
