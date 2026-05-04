@@ -10,7 +10,6 @@ spec:
   volumeMode: Filesystem
   accessModes:
     - ReadWriteMany
-  storageClassName: itsuki
 ---
 apiVersion: tekton.dev/v1beta1
 kind: Pipeline
