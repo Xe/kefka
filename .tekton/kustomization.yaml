@@ -1,0 +1,4 @@
+namespace: ci
+resources:
+  - go-mod-cache-pvc.yaml
+  - kefka-pipeline.yaml
