@@ -47,3 +47,24 @@ spec:
           value: $(params.repo-url)
         - name: commit
           value: $(params.commit)
+    - name: go-test
+      taskSpec:
+        params:
+          - name: "folder"
+            description: "path to source code"
+            default: "/workspace/repo-data/repo"
+        steps:
+          - name: go-mod-download
+            image: golang:1.26
+            script: |
+              cd $(params.folder)
+              go mod download
+          - name: run-tests
+            image: golang:1.26
+            script: |
+              cd $(params.folder)
+              go test ./...
+        workspaces:
+          - name: "repo-data"
+            description: "Repository data for other steps in the pipeline"
+            mountPath: "/workspace/repo-data"
