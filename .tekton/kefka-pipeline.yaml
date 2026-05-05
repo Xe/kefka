@@ -86,7 +86,7 @@ spec:
       params:
         - name: IMAGE
           value: registry.int.xeserv.us/xeiaso.net/kefka/sophia:latest
-        - name: CONTEXT
-          value: repo
         - name: DOCKERFILE
           value: ./docker/sophia.Dockerfile
+        - name: REPO_FOLDER
+          value: /repo
