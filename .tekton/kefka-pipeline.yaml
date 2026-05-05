@@ -64,3 +64,15 @@ spec:
           workspace: repo-data
         - name: go-mod-cache
           workspace: go-mod-cache
+    - name: docker-build
+      runAfter: ["clone-repo"]
+      taskRef:
+        name: kaniko
+      workspaces:
+        - name: source
+          workspace: repo-data
+      params:
+        - name: IMAGE
+          value: registry.int.xeserv.us/xeiaso.net/kefka/sophia:latest
+        - name: DOCKERFILE
+          value: ./docker/sophia.Dockerfile
