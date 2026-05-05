@@ -23,7 +23,19 @@ spec:
       description: |
         Go module cache
   tasks:
+    - name: fix-permissions-repo-data
+      taskRef:
+        name: fix-permissions
+      workspaces:
+        - name: dir
+          workspace: repo-data
+      params:
+        - name: uid
+          value: 65532
+        - name: gid
+          value: 65532
     - name: clone-repo
+      runAfter: ["fix-permissions-repo-data"]
       taskRef:
         name: git-clone
       workspaces:
