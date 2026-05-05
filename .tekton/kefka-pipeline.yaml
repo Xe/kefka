@@ -34,6 +34,8 @@ spec:
           value: $(params.repo-url)
         - name: revision
           value: $(params.commit)
+        - name: subdirectory
+          value: repo
     - name: go-test
       runAfter: ["clone-repo"]
       taskSpec:
