@@ -44,8 +44,6 @@ spec:
           value: $(params.repo-url)
         - name: revision
           value: $(params.commit)
-        - name: refspec
-          value: "refs/tags/*:refs/tags/*"
     - name: go-test
       runAfter: ["clone-repo"]
       taskRef:
