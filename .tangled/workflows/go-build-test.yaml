@@ -15,3 +15,5 @@ tack:
         storage: 1Gi
       - name: go-mod-cache
         pvc: go-mod-cache
+      - name: dockerconfig-atcr
+        secret: atcr
