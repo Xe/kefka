@@ -26,7 +26,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/registry/coreutils"
 	"tangled.org/xeiaso.net/kefka/command/registry/wasmprog"
 	"tangled.org/xeiaso.net/kefka/internal/billysh"
-	"tangled.org/xeiaso.net/kefka/internal/s3fs"
+	"tangled.org/xeiaso.net/kefka/s3fs"
 
 	_ "embed"
 
@@ -166,8 +166,8 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 	// commandActive is true, and closes it (signalling EOF to the wasm
 	// guest) when the user presses Ctrl-D.
 	var (
-		cmdMu      sync.Mutex
-		cmdStdinW  *os.File
+		cmdMu     sync.Mutex
+		cmdStdinW *os.File
 	)
 
 	// Pump SSH client bytes into either the prompt pipe (when idle) or the

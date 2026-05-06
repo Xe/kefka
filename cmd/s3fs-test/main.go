@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/pflag"
-	"tangled.org/xeiaso.net/kefka/internal/s3fs"
+	"tangled.org/xeiaso.net/kefka/s3fs"
 
 	_ "github.com/joho/godotenv/autoload"
 )
