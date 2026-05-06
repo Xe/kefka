@@ -4,7 +4,7 @@ when:
   - event: ["pull_request"]
     branch: ["main"]
 
-engine: nixery
+engine: tack
 
 tack:
   tekton:
