@@ -59,14 +59,14 @@ spec:
     - name: build-sophia
       runAfter: ["clone-repo"]
       taskRef:
-        name: ko
+        name: kaniko
       workspaces:
         - name: source
           workspace: repo-data
         - name: dockerconfig
           workspace: dockerconfig-atcr
       params:
-        - name: KO_DOCKER_REPO
-          value: atcr.io/xeiaso.net/kefka
-        - name: packages
-          value: ["./cmd/sophia"]
+        - name: IMAGE
+          value: atcr.io/xeiaso.net/kefka/sophia:latest
+        - name: DOCKERFILE
+          value: ./docker/sophia.Dockerfile
