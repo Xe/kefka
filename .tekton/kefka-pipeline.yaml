@@ -29,11 +29,6 @@ spec:
       workspaces:
         - name: dir
           workspace: repo-data
-      params:
-        - name: uid
-          value: 65532
-        - name: gid
-          value: 65532
     - name: clone-repo
       runAfter: ["fix-permissions-repo-data"]
       taskRef:
@@ -46,8 +41,6 @@ spec:
           value: $(params.repo-url)
         - name: revision
           value: $(params.commit)
-        - name: subdirectory
-          value: repo
     - name: go-test
       runAfter: ["clone-repo"]
       taskRef:
@@ -55,8 +48,6 @@ spec:
       params:
         - name: version
           value: 1.26
-        - name: subfolder
-          value: /repo
       workspaces:
         - name: source
           workspace: repo-data
@@ -74,5 +65,3 @@ spec:
           value: registry.int.xeserv.us/xeiaso.net/kefka/sophia:latest
         - name: DOCKERFILE
           value: ./docker/sophia.Dockerfile
-        - name: REPO_FOLDER
-          value: /repo
