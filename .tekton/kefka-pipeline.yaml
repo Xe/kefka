@@ -19,9 +19,6 @@ spec:
     - name: repo-data
       description: |
         Cloned repo files.
-    - name: go-mod-cache
-      description: |
-        Go module cache
     - name: dockerconfig-atcr
       description: |
         Docker config for pushing images to atcr
@@ -54,8 +51,6 @@ spec:
       workspaces:
         - name: source
           workspace: repo-data
-        - name: go-mod-cache
-          workspace: go-mod-cache
     - name: build-sophia
       runAfter: ["clone-repo"]
       taskRef:
