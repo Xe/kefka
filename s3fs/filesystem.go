@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path"
 
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/go-git/go-billy/v5"
+	"github.com/tigrisdata/storage-go"
 )
 
 const (
@@ -13,14 +13,14 @@ const (
 )
 
 type S3FS struct {
-	client    *s3.Client
+	client    *storage.Client
 	bucket    string
 	root      string
 	separator string
 }
 
 // NewS3FS creates a new S3FS Filesystem.
-func NewS3FS(client *s3.Client, bucket string) (billy.Filesystem, error) {
+func NewS3FS(client *storage.Client, bucket string) (billy.Filesystem, error) {
 	// Check for a non-nil client
 	if client == nil {
 		return nil, fmt.Errorf("s3 client cannot be nil")

@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/pflag"
+	"github.com/tigrisdata/storage-go"
 	"tangled.org/xeiaso.net/kefka/s3fs"
 
 	_ "github.com/joho/godotenv/autoload"
@@ -23,11 +23,10 @@ func main() {
 	pflag.Parse()
 	fmt.Println("bucket:", *bucket)
 
-	cfg, err := config.LoadDefaultConfig(context.Background())
+	client, err := storage.New(context.Background())
 	if err != nil {
-		panic(err)
+		log.Fatal(fmt.Errorf("can't make storage client: %w", err))
 	}
-	client := s3.NewFromConfig(cfg)
 
 	fsys, err := s3fs.NewS3FS(client, *bucket)
 	if err != nil {

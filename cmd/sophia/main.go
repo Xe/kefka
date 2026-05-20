@@ -119,7 +119,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 		lg.Info("cleaned up bucket")
 	}()
 
-	fsys, err := s3fs.NewS3FS(client.Client, sessBucket)
+	fsys, err := s3fs.NewS3FS(client, sessBucket)
 	if err != nil {
 		return fmt.Errorf("can't setup s3fs: %w", err)
 	}

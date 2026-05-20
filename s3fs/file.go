@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/tigrisdata/storage-go"
 	"go.uber.org/atomic"
 )
 
@@ -30,15 +31,15 @@ var (
 //
 // Upon creation, the file is loaded from S3.
 type s3ReadFile struct {
-	client *s3.Client    // s3 skd client
-	bucket string        // S3 bucket name
-	key    string        // File object's key in S3
-	closed bool          // Is the file closed?
-	reader *bytes.Reader // Buffer for file contents
+	client *storage.Client // s3 skd client
+	bucket string          // S3 bucket name
+	key    string          // File object's key in S3
+	closed bool            // Is the file closed?
+	reader *bytes.Reader   // Buffer for file contents
 }
 
 // newS3ReadFile creates a new s3ReadFile.
-func newS3ReadFile(client *s3.Client, bucket, key string) (*s3ReadFile, error) {
+func newS3ReadFile(client *storage.Client, bucket, key string) (*s3ReadFile, error) {
 	// TODO: Check if the file exists
 	// ...
 
@@ -132,15 +133,15 @@ func (f *s3ReadFile) Truncate(size int64) error {
 // Upon creation, a buffer is created to store the file contents. Upon close,
 // the file is uploaded to S3.
 type s3WriteFile struct {
-	client *s3.Client    // s3 skd client
-	bucket string        // S3 bucket name
-	key    string        // File object's key in S3
-	closed bool          // Is the file closed?
-	buf    *bytes.Buffer // Buffer for storing the file before it's uploaded
+	client *storage.Client // s3 skd client
+	bucket string          // S3 bucket name
+	key    string          // File object's key in S3
+	closed bool            // Is the file closed?
+	buf    *bytes.Buffer   // Buffer for storing the file before it's uploaded
 }
 
 // newS3WriteFile creates a new s3ReadFile.
-func newS3WriteFile(client *s3.Client, bucket, key string) (*s3WriteFile, error) {
+func newS3WriteFile(client *storage.Client, bucket, key string) (*s3WriteFile, error) {
 	// TODO: Validate the key
 	// ...
 
@@ -224,16 +225,16 @@ func (f *s3WriteFile) Truncate(size int64) error {
 
 // s3MultipartUploadFile implements billy.File
 type s3MultipartUploadFile struct {
-	client   *s3.Client    // s3 skd client
-	bucket   string        // S3 bucket name
-	key      string        // File object's key in S3
-	closed   bool          // Is the file closed?
-	uploadID string        // S3 multipart upload ID
-	uploadN  *atomic.Int32 // Counter tracking the number of uploads
+	client   *storage.Client // s3 skd client
+	bucket   string          // S3 bucket name
+	key      string          // File object's key in S3
+	closed   bool            // Is the file closed?
+	uploadID string          // S3 multipart upload ID
+	uploadN  *atomic.Int32   // Counter tracking the number of uploads
 }
 
 // newS3MultipartUploadFile creates a new s3ReadFile.
-func newS3MultipartUploadFile(client *s3.Client, bucket, key string) (*s3MultipartUploadFile, error) {
+func newS3MultipartUploadFile(client *storage.Client, bucket, key string) (*s3MultipartUploadFile, error) {
 	// TODO: Check if the file exists
 	// ...
 
@@ -377,9 +378,9 @@ func (f *s3DirFile) eisdir(op string) error {
 	return &os.PathError{Op: op, Path: f.name, Err: syscall.EISDIR}
 }
 
-func (f *s3DirFile) Read(p []byte) (int, error)            { return 0, f.eisdir("read") }
+func (f *s3DirFile) Read(p []byte) (int, error)              { return 0, f.eisdir("read") }
 func (f *s3DirFile) ReadAt(p []byte, off int64) (int, error) { return 0, f.eisdir("read") }
-func (f *s3DirFile) Write(p []byte) (int, error)           { return 0, f.eisdir("write") }
+func (f *s3DirFile) Write(p []byte) (int, error)             { return 0, f.eisdir("write") }
 func (f *s3DirFile) Seek(offset int64, whence int) (int64, error) {
 	return 0, f.eisdir("seek")
 }
