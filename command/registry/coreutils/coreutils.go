@@ -6,6 +6,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/internal/cat"
 	"tangled.org/xeiaso.net/kefka/command/internal/clear"
 	"tangled.org/xeiaso.net/kefka/command/internal/column"
+	"tangled.org/xeiaso.net/kefka/command/internal/commands"
 	"tangled.org/xeiaso.net/kefka/command/internal/cp"
 	"tangled.org/xeiaso.net/kefka/command/internal/cut"
 	"tangled.org/xeiaso.net/kefka/command/internal/date"
@@ -64,6 +65,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("cat", cat.Impl{})
 	reg.Register("clear", clear.Impl{})
 	reg.Register("column", column.Impl{})
+	reg.Register("commands", commands.Impl{Reg: reg})
 	reg.Register("cp", cp.Impl{})
 	reg.Register("cut", cut.Impl{})
 	reg.Register("date", date.Impl{})

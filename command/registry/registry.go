@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 
@@ -38,6 +39,19 @@ func (i *Impl) Get(name string) (command.Execer, bool) {
 
 	cmd, ok := i.commands[name]
 	return cmd, ok
+}
+
+// Names returns the names of all registered commands in sorted order.
+func (i *Impl) Names() []string {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	names := make([]string, 0, len(i.commands))
+	for name := range i.commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func New() *Impl {
