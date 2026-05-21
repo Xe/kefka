@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -34,9 +35,11 @@ import (
 )
 
 var (
-	bind    = pflag.StringP("bind", "b", ":2222", "host:port to bind SSH to")
-	bucket  = pflag.StringP("bucket", "B", os.Getenv("BUCKET_NAME"), "the bucket name to constrain sessions to")
-	timeout = pflag.DurationP("timeout", "T", 5*time.Minute, "the total time a command can run for")
+	bind          = pflag.StringP("bind", "b", ":2222", "host:port to bind SSH to")
+	bucket        = pflag.StringP("bucket", "B", os.Getenv("BUCKET_NAME"), "the bucket name to constrain sessions to")
+	timeout       = pflag.DurationP("timeout", "T", 5*time.Minute, "the total time a command can run for")
+	sshPrivateKey = pflag.String("ssh-private-key", cmp.Or(os.Getenv("SSH_PRIVATE_KEY"), "./var/ssh_host_ed25519_key"), "path to the SSH host private key (PEM)")
+	sshPublicKey  = pflag.String("ssh-public-key", cmp.Or(os.Getenv("SSH_PUBLIC_KEY"), "./var/ssh_host_ed25519_key.pub"), "path to the SSH host public key")
 
 	//go:embed static/motd
 	motd []byte
@@ -44,6 +47,17 @@ var (
 
 func main() {
 	pflag.Parse()
+
+	for _, k := range []struct {
+		flag, path string
+	}{
+		{"--ssh-private-key", *sshPrivateKey},
+		{"--ssh-public-key", *sshPublicKey},
+	} {
+		if _, err := os.Stat(k.path); err != nil {
+			log.Fatalf("%s %q: %v", k.flag, k.path, err)
+		}
+	}
 
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -53,8 +67,8 @@ func main() {
 func run() error {
 	srv := New()
 
-	slog.Info("listening", "bind", *bind, "timeout", *timeout)
-	return ssh.ListenAndServe(*bind, srv.HandleSSH)
+	slog.Info("listening", "bind", *bind, "timeout", *timeout, "sshPrivateKey", *sshPrivateKey, "sshPublicKey", *sshPublicKey)
+	return ssh.ListenAndServe(*bind, srv.HandleSSH, ssh.HostKeyFile(*sshPrivateKey))
 }
 
 type Server struct {
