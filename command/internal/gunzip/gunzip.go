@@ -228,15 +228,12 @@ func decompressFiles(ec *command.ExecContext, files []string, suffix string, toS
 			continue
 		}
 
-		f, err := ec.FS.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-		if err != nil {
+		if err := writeOutput(ec, outPath, decompressed); err != nil {
 			if !quiet {
 				fmt.Fprintf(stderr, "gunzip: %s: %v\n", outPath, err)
 			}
 			return err
 		}
-		f.Write(decompressed)
-		f.Close()
 
 		if verbose {
 			ratio := "0.0"
@@ -325,6 +322,31 @@ func readFile(ec *command.ExecContext, file string) ([]byte, error) {
 	defer f.Close()
 
 	return io.ReadAll(f)
+}
+
+// writeOutput writes payload to outPath. If the underlying filesystem
+// short-writes or fails to close cleanly, it deletes the (presumed corrupt)
+// output and returns an error so the caller can refuse to delete the source.
+// This guards against backends like s3fs where a misbehaving Write can claim
+// success while persisting nothing.
+func writeOutput(ec *command.ExecContext, outPath string, payload []byte) error {
+	f, err := ec.FS.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	n, writeErr := f.Write(payload)
+	closeErr := f.Close()
+	if writeErr == nil && n != len(payload) {
+		writeErr = fmt.Errorf("short write: wrote %d of %d bytes", n, len(payload))
+	}
+	if writeErr != nil || closeErr != nil {
+		ec.FS.Remove(outPath)
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
+	}
+	return nil
 }
 
 func decompressData(data []byte) ([]byte, error) {

@@ -241,6 +241,7 @@ func testMode(ec *command.ExecContext, files []string, quiet, verbose bool, stde
 
 func compressMode(ec *command.ExecContext, files []string, toStdout, force, keep bool, suffix string, quiet, verbose, fast, best bool, stderr io.Writer) error {
 	level := level(fast, best)
+	exitStatus := 0
 	for _, file := range files {
 		if file == "-" {
 			data, err := io.ReadAll(ec.Stdin)
@@ -265,7 +266,8 @@ func compressMode(ec *command.ExecContext, files []string, toStdout, force, keep
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: No such file or directory\n", file)
 			}
-			return interp.ExitStatus(1)
+			exitStatus = 1
+			continue
 		}
 
 		if info.IsDir() {
@@ -287,7 +289,8 @@ func compressMode(ec *command.ExecContext, files []string, toStdout, force, keep
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: No such file or directory\n", file)
 			}
-			return interp.ExitStatus(1)
+			exitStatus = 1
+			continue
 		}
 		data, err := io.ReadAll(f)
 		f.Close()
@@ -295,6 +298,7 @@ func compressMode(ec *command.ExecContext, files []string, toStdout, force, keep
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: %v\n", file, err)
 			}
+			exitStatus = 1
 			continue
 		}
 
@@ -303,6 +307,7 @@ func compressMode(ec *command.ExecContext, files []string, toStdout, force, keep
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: %v\n", file, err)
 			}
+			exitStatus = 1
 			continue
 		}
 
@@ -327,15 +332,13 @@ func compressMode(ec *command.ExecContext, files []string, toStdout, force, keep
 			continue
 		}
 
-		outF, err := ec.FS.Create(outputFull)
-		if err != nil {
+		if err := writeOutput(ec, outputFull, compressed); err != nil {
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: %v\n", outputPath, err)
 			}
+			exitStatus = 1
 			continue
 		}
-		outF.Write(compressed)
-		outF.Close()
 
 		if verbose {
 			ratio := 0.0
@@ -349,10 +352,14 @@ func compressMode(ec *command.ExecContext, files []string, toStdout, force, keep
 			ec.FS.Remove(full)
 		}
 	}
+	if exitStatus != 0 {
+		return interp.ExitStatus(exitStatus)
+	}
 	return nil
 }
 
 func decompressMode(ec *command.ExecContext, files []string, toStdout, force, keep bool, suffix string, quiet, verbose bool, stderr io.Writer) error {
+	exitStatus := 0
 	for _, file := range files {
 		if file == "-" {
 			data, err := io.ReadAll(ec.Stdin)
@@ -386,7 +393,8 @@ func decompressMode(ec *command.ExecContext, files []string, toStdout, force, ke
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: No such file or directory\n", file)
 			}
-			return interp.ExitStatus(1)
+			exitStatus = 1
+			continue
 		}
 
 		if info.IsDir() {
@@ -408,7 +416,8 @@ func decompressMode(ec *command.ExecContext, files []string, toStdout, force, ke
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: No such file or directory\n", file)
 			}
-			return interp.ExitStatus(1)
+			exitStatus = 1
+			continue
 		}
 		data, err := io.ReadAll(f)
 		f.Close()
@@ -416,6 +425,7 @@ func decompressMode(ec *command.ExecContext, files []string, toStdout, force, ke
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: %v\n", file, err)
 			}
+			exitStatus = 1
 			continue
 		}
 
@@ -423,6 +433,7 @@ func decompressMode(ec *command.ExecContext, files []string, toStdout, force, ke
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: not in gzip format\n", file)
 			}
+			exitStatus = 1
 			continue
 		}
 
@@ -431,6 +442,7 @@ func decompressMode(ec *command.ExecContext, files []string, toStdout, force, ke
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: %v\n", file, err)
 			}
+			exitStatus = 1
 			continue
 		}
 
@@ -455,15 +467,13 @@ func decompressMode(ec *command.ExecContext, files []string, toStdout, force, ke
 			continue
 		}
 
-		outF, err := ec.FS.Create(outputFull)
-		if err != nil {
+		if err := writeOutput(ec, outputFull, decompressed); err != nil {
 			if !quiet {
 				fmt.Fprintf(stderr, "gzip: %s: %v\n", outputPath, err)
 			}
+			exitStatus = 1
 			continue
 		}
-		outF.Write(decompressed)
-		outF.Close()
 
 		if verbose {
 			ratio := 0.0
@@ -476,6 +486,34 @@ func decompressMode(ec *command.ExecContext, files []string, toStdout, force, ke
 		if !keep {
 			ec.FS.Remove(full)
 		}
+	}
+	if exitStatus != 0 {
+		return interp.ExitStatus(exitStatus)
+	}
+	return nil
+}
+
+// writeOutput writes payload to outputFull. If the underlying filesystem
+// short-writes or fails to close cleanly, it deletes the (presumed corrupt)
+// output and returns an error so the caller can refuse to delete the source.
+// This guards against backends like s3fs where a misbehaving Write can claim
+// success while persisting nothing.
+func writeOutput(ec *command.ExecContext, outputFull string, payload []byte) error {
+	outF, err := ec.FS.Create(outputFull)
+	if err != nil {
+		return err
+	}
+	n, writeErr := outF.Write(payload)
+	closeErr := outF.Close()
+	if writeErr == nil && n != len(payload) {
+		writeErr = fmt.Errorf("short write: wrote %d of %d bytes", n, len(payload))
+	}
+	if writeErr != nil || closeErr != nil {
+		ec.FS.Remove(outputFull)
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
 	}
 	return nil
 }

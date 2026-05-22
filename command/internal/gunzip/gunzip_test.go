@@ -332,3 +332,75 @@ func TestRecursive(t *testing.T) {
 		t.Errorf("file content = %q, want \"recursive content\"", data)
 	}
 }
+
+// silentDropFS wraps a billy.Filesystem so any file opened for writing
+// silently drops writes (Write returns 0, nil — exactly the bug that lived
+// in s3fs.s3WriteFile.Write).
+type silentDropFS struct {
+	billy.Filesystem
+}
+
+func (s *silentDropFS) Create(filename string) (billy.File, error) {
+	f, err := s.Filesystem.Create(filename)
+	if err != nil {
+		return nil, err
+	}
+	return &silentDropFile{File: f}, nil
+}
+
+func (s *silentDropFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, error) {
+	f, err := s.Filesystem.OpenFile(filename, flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	if flag&(os.O_WRONLY|os.O_RDWR) != 0 {
+		return &silentDropFile{File: f}, nil
+	}
+	return f, nil
+}
+
+type silentDropFile struct {
+	billy.File
+}
+
+func (silentDropFile) Write(p []byte) (int, error) { return 0, nil }
+
+// TestNoSourceRemovalOnShortWrite ensures that when the output filesystem
+// silently drops writes (as s3fs once did), gunzip surfaces an error and
+// leaves the source .gz file intact instead of deleting it.
+func TestNoSourceRemovalOnShortWrite(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		sourcePath string
+		outputPath string
+		wantStderr string
+	}{
+		{
+			name:       "default suffix",
+			args:       []string{"hello.txt.gz"},
+			sourcePath: "hello.txt.gz",
+			outputPath: "hello.txt",
+			wantStderr: "hello.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := &silentDropFS{Filesystem: newFS(t)}
+			_, stderr, err := run(t, tt.args, nil, fs)
+			if err == nil {
+				t.Fatal("expected non-nil error when writes are dropped")
+			}
+			if _, statErr := fs.Stat(tt.sourcePath); statErr != nil {
+				t.Errorf("source %s was removed despite write failure: %v", tt.sourcePath, statErr)
+			}
+			if _, statErr := fs.Stat(tt.outputPath); statErr == nil {
+				t.Errorf("empty %s should have been cleaned up after short write", tt.outputPath)
+			}
+			if !bytes.Contains(stderr, []byte(tt.wantStderr)) {
+				t.Errorf("stderr = %q, want a message mentioning %q", string(stderr), tt.wantStderr)
+			}
+		})
+	}
+}

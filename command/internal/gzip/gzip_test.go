@@ -14,6 +14,38 @@ import (
 	"tangled.org/xeiaso.net/kefka/command"
 )
 
+// silentDropFS wraps a billy.Filesystem so any file opened via Create or
+// OpenFile silently drops writes (Write returns 0, nil — exactly the bug
+// that lived in s3fs.s3WriteFile.Write).
+type silentDropFS struct {
+	billy.Filesystem
+}
+
+func (s *silentDropFS) Create(filename string) (billy.File, error) {
+	f, err := s.Filesystem.Create(filename)
+	if err != nil {
+		return nil, err
+	}
+	return &silentDropFile{File: f}, nil
+}
+
+func (s *silentDropFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, error) {
+	f, err := s.Filesystem.OpenFile(filename, flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	if flag&(os.O_WRONLY|os.O_RDWR) != 0 {
+		return &silentDropFile{File: f}, nil
+	}
+	return f, nil
+}
+
+type silentDropFile struct {
+	billy.File
+}
+
+func (silentDropFile) Write(p []byte) (int, error) { return 0, nil }
+
 func newFS(t *testing.T) billy.Filesystem {
 	t.Helper()
 	fs := memfs.New()
@@ -370,5 +402,66 @@ func TestAlreadyHasSuffix(t *testing.T) {
 	}
 	if !bytes.Contains(stderr, []byte("already has .gz suffix")) {
 		t.Errorf("stderr = %q, want 'already has .gz suffix'", string(stderr))
+	}
+}
+
+// TestNoSourceRemovalOnShortWrite simulates the s3fs Write stub (returns 0,
+// nil): the output bytes never reach storage, so gzip must surface an error
+// and leave the source intact for both compress and decompress paths. The
+// original bug deleted the source and persisted an empty file instead.
+func TestNoSourceRemovalOnShortWrite(t *testing.T) {
+	tests := []struct {
+		name       string
+		setupFS    func(t *testing.T) billy.Filesystem
+		args       []string
+		sourcePath string
+		outputPath string
+		wantStderr string
+	}{
+		{
+			name:       "compress",
+			setupFS:    func(t *testing.T) billy.Filesystem { return newFS(t) },
+			args:       []string{"hello.txt"},
+			sourcePath: "hello.txt",
+			outputPath: "hello.txt.gz",
+			wantStderr: "hello.txt",
+		},
+		{
+			name: "decompress",
+			setupFS: func(t *testing.T) billy.Filesystem {
+				fs := memfs.New()
+				var buf bytes.Buffer
+				w := gzlib.NewWriter(&buf)
+				w.Write([]byte("hello world"))
+				w.Close()
+				f, _ := fs.Create("hello.txt.gz")
+				f.Write(buf.Bytes())
+				f.Close()
+				return fs
+			},
+			args:       []string{"-d", "hello.txt.gz"},
+			sourcePath: "hello.txt.gz",
+			outputPath: "hello.txt",
+			wantStderr: "hello.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := &silentDropFS{Filesystem: tt.setupFS(t)}
+			_, stderr, err := run(t, tt.args, nil, fs)
+			if err == nil {
+				t.Fatal("expected non-nil error when writes are dropped")
+			}
+			if _, statErr := fs.Stat(tt.sourcePath); statErr != nil {
+				t.Errorf("source %s was removed despite write failure: %v", tt.sourcePath, statErr)
+			}
+			if _, statErr := fs.Stat(tt.outputPath); statErr == nil {
+				t.Errorf("empty %s should have been cleaned up after short write", tt.outputPath)
+			}
+			if !bytes.Contains(stderr, []byte(tt.wantStderr)) {
+				t.Errorf("stderr = %q, want a message mentioning %q", string(stderr), tt.wantStderr)
+			}
+		})
 	}
 }
