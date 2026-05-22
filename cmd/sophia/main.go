@@ -9,8 +9,10 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -36,11 +38,13 @@ import (
 )
 
 var (
-	bind          = pflag.StringP("bind", "b", ":2222", "host:port to bind SSH to")
-	bucket        = pflag.StringP("bucket", "B", os.Getenv("BUCKET_NAME"), "the bucket name to constrain sessions to")
-	timeout       = pflag.DurationP("timeout", "T", 5*time.Minute, "the total time a command can run for")
-	sshPrivateKey = pflag.String("ssh-private-key", cmp.Or(os.Getenv("SSH_PRIVATE_KEY"), "./var/ssh_host_ed25519_key"), "path to the SSH host private key (PEM)")
-	sshPublicKey  = pflag.String("ssh-public-key", cmp.Or(os.Getenv("SSH_PUBLIC_KEY"), "./var/ssh_host_ed25519_key.pub"), "path to the SSH host public key")
+	bind                 = pflag.StringP("bind", "b", ":2222", "host:port to bind SSH to")
+	bucket               = pflag.StringP("bucket", "B", os.Getenv("BUCKET_NAME"), "the bucket name to constrain sessions to")
+	timeout              = pflag.DurationP("timeout", "T", 5*time.Minute, "the total time a command can run for")
+	sshPrivateKey        = pflag.String("ssh-private-key", cmp.Or(os.Getenv("SSH_PRIVATE_KEY"), "./var/ssh_host_ed25519_key"), "path to the SSH host private key (PEM)")
+	sshPublicKey         = pflag.String("ssh-public-key", cmp.Or(os.Getenv("SSH_PUBLIC_KEY"), "./var/ssh_host_ed25519_key.pub"), "path to the SSH host public key")
+	shutdownGrace        = pflag.Duration("shutdown-grace", 30*time.Second, "how long to wait for in-flight SSH sessions to finish after a shutdown signal before forcing them closed")
+	shutdownForceTimeout = pflag.Duration("shutdown-force-timeout", 90*time.Second, "how long to wait, after force-closing connections, for per-session bucket cleanup to finish")
 
 	//go:embed static/motd
 	motd []byte
@@ -68,11 +72,72 @@ func main() {
 func run() error {
 	srv := New()
 
+	server := &ssh.Server{
+		Addr:    *bind,
+		Handler: srv.HandleSSH,
+	}
+	if err := server.SetOption(ssh.HostKeyFile(*sshPrivateKey)); err != nil {
+		return fmt.Errorf("can't set SSH host key: %w", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	slog.Info("listening", "bind", *bind, "timeout", *timeout, "sshPrivateKey", *sshPrivateKey, "sshPublicKey", *sshPublicKey)
-	return ssh.ListenAndServe(*bind, srv.HandleSSH, ssh.HostKeyFile(*sshPrivateKey))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+	}
+
+	slog.Info("shutting down", "grace", *shutdownGrace, "force_timeout", *shutdownForceTimeout)
+
+	graceCtx, cancelGrace := context.WithTimeout(context.Background(), *shutdownGrace)
+	defer cancelGrace()
+	if err := server.Shutdown(graceCtx); err != nil {
+		slog.Warn("graceful shutdown exceeded grace period, forcing close", "err", err)
+		if cerr := server.Close(); cerr != nil {
+			slog.Error("force close failed", "err", cerr)
+		}
+	}
+
+	// gliderlabs/ssh's connWg (which Shutdown waits on) decrements when the
+	// connection loop exits, not when our HandleSSH returns. Wait on our own
+	// session WaitGroup so each runKefka's deferred DeleteBucket actually runs
+	// to completion before main exits.
+	done := make(chan struct{})
+	go func() {
+		srv.sessions.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(*shutdownForceTimeout):
+		slog.Error("session cleanup did not complete in force timeout; some buckets may be orphaned")
+	}
+
+	if err := <-errCh; err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+		return err
+	}
+	slog.Info("shutdown complete")
+	return nil
 }
 
 type Server struct {
+	// sessions tracks in-flight HandleSSH invocations so shutdown can wait
+	// for each runKefka's deferred bucket cleanup to complete. gliderlabs/ssh's
+	// own connWg counts connection-loop goroutines, which return before the
+	// session handler goroutine does, so Server.Shutdown alone is not enough.
+	sessions sync.WaitGroup
 }
 
 func New() *Server {
@@ -80,6 +145,9 @@ func New() *Server {
 }
 
 func (s *Server) HandleSSH(sess ssh.Session) {
+	s.sessions.Add(1)
+	defer s.sessions.Done()
+
 	sess.Write(motd)
 
 	lg := slog.With("remoteAddr", sess.RemoteAddr().String(), "user", sess.User())
