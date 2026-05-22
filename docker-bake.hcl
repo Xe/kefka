@@ -12,11 +12,15 @@ target "sophia" {
     ALPINE_VERSION = null
     GO_VERSION = null
   }
+  attest = [
+    "type=provenance,mode=max",
+    "type=sbom",
+  ]
   context = "."
   dockerfile = "./docker/sophia.Dockerfile"
   platforms = [ "linux/amd64", "linux/arm64" ]
   pull = true
   tags = [
-    "ghcr.io/xe/kefka/sophia:main"
+    "atcr.io/xeiaso.net/kefka/sophia:latest"
   ]
 }
