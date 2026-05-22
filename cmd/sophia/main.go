@@ -23,6 +23,7 @@ import (
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
+	"tangled.org/xeiaso.net/kefka/cmd/sophia/commands/snapshot"
 	"tangled.org/xeiaso.net/kefka/command/registry"
 	"tangled.org/xeiaso.net/kefka/command/registry/coreutils"
 	"tangled.org/xeiaso.net/kefka/command/registry/wasmprog"
@@ -72,17 +73,10 @@ func run() error {
 }
 
 type Server struct {
-	reg *registry.Impl
 }
 
 func New() *Server {
-	reg := registry.New()
-	coreutils.Register(reg)
-	wasmprog.Register(reg)
-
-	return &Server{
-		reg: reg,
-	}
+	return &Server{}
 }
 
 func (s *Server) HandleSSH(sess ssh.Session) {
@@ -99,10 +93,16 @@ func (s *Server) HandleSSH(sess ssh.Session) {
 }
 
 func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
+	reg := registry.New()
+	coreutils.Register(reg)
+	wasmprog.Register(reg)
+
 	client, err := storage.New(sess.Context())
 	if err != nil {
 		return fmt.Errorf("can't make storage client: %w", err)
 	}
+
+	reg.Register("snapshot", snapshot.Impl{Client: client})
 
 	sessID := uuid.Must(uuid.NewV7()).String()
 	sessBucket := *bucket + "-" + sessID
@@ -265,7 +265,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 
 	middleware := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
-			return s.reg.Exec(ctx, fsys, sh, args)
+			return reg.Exec(ctx, fsys, sh, args)
 		}
 	}
 
@@ -280,6 +280,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 		"OPTIND=1",
 		"KEFKA=1",
 		"PATH=/usr/bin:/bin",
+		"BUCKET_NAME="+sessBucket,
 	)
 
 	sh, err = interp.New(
@@ -287,10 +288,10 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 		interp.Env(env),
 		interp.StdIO(nil, stdoutW, stderrW),
 		interp.ExecHandlers(middleware),
-		interp.CallHandler(billysh.CallHandler(s.reg, fsys, os.Stdout, os.Stderr)),
-		interp.StatHandler(billysh.FsysStatHandler(s.reg, fsys)),
-		interp.OpenHandler(billysh.FsysOpenHandler(s.reg, fsys)),
-		interp.ReadDirHandler2(billysh.FsysReadDirHandler(s.reg, fsys)),
+		interp.CallHandler(billysh.CallHandler(reg, fsys, os.Stdout, os.Stderr)),
+		interp.StatHandler(billysh.FsysStatHandler(reg, fsys)),
+		interp.OpenHandler(billysh.FsysOpenHandler(reg, fsys)),
+		interp.ReadDirHandler2(billysh.FsysReadDirHandler(reg, fsys)),
 	)
 	if err != nil {
 		return fmt.Errorf("can't make shell: %w", err)
