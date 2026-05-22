@@ -160,7 +160,10 @@ func (f *s3WriteFile) Name() string {
 
 // Write implements os.Writer for billy.File
 func (f *s3WriteFile) Write(p []byte) (n int, err error) {
-	return 0, nil
+	if f.closed {
+		return 0, ErrFileClosed
+	}
+	return f.buf.Write(p)
 }
 
 // Read implements os.Reader for billy.File
