@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sophia
+  labels:
+    app.kubernetes.io/name: sophia
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sophia
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sophia
+    spec:
+      volumes:
+        - name: ssh-keys
+          secret:
+            secretName: sophia-ssh-keys
+      securityContext:
+        fsGroup: 1000
+      imagePullSecrets:
+        - name: atcr
+      containers:
+        - name: main
+          image: atcr.io/xeiaso.net/kefka/sophia:latest
+          imagePullPolicy: "Always"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              cpu: 2000m
+              memory: 512Mi
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: SSH_PRIVATE_KEY
+              value: /sophia/etc/ssh/keys/ssh_host_ed25519_key
+            - name: SSH_PUBLIC_KEY
+              value: /sophia/etc/ssh/keys/ssh_host_ed25519_key.pub
+          envFrom:
+            - secretRef:
+                name: tigris-creds
+          volumeMounts:
+            - name: ssh-keys
+              mountPath: /sophia/etc/ssh/keys
+              readOnly: true

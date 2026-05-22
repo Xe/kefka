@@ -1,0 +1,7 @@
+namespace: sophia
+
+resources:
+  - namespace.yaml
+  - 1password.yaml
+  - deployment.yaml
+  - service.yaml
