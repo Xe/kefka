@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -31,6 +32,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/command/registry/wasmprog"
 	"tangled.org/xeiaso.net/kefka/internal/billysh"
 	"tangled.org/xeiaso.net/kefka/s3fs"
+	"tangled.org/xeiaso.net/kefka/s3fs/unixmeta"
 
 	_ "embed"
 
@@ -45,6 +47,11 @@ var (
 	sshPublicKey         = pflag.String("ssh-public-key", cmp.Or(os.Getenv("SSH_PUBLIC_KEY"), "./var/ssh_host_ed25519_key.pub"), "path to the SSH host public key")
 	shutdownGrace        = pflag.Duration("shutdown-grace", 30*time.Second, "how long to wait for in-flight SSH sessions to finish after a shutdown signal before forcing them closed")
 	shutdownForceTimeout = pflag.Duration("shutdown-force-timeout", 90*time.Second, "how long to wait, after force-closing connections, for per-session bucket cleanup to finish")
+
+	fsUnixMetadata = pflag.Bool("fs-unix-metadata", false, "store POSIX file attributes (uid/gid/mode/mtime) as S3 user metadata")
+	fsUser         = pflag.String("fs-user", "0", "owner (name or numeric uid) recorded on written files when --fs-unix-metadata is set")
+	fsGroup        = pflag.String("fs-group", "0", "group (name or numeric gid) recorded on written files when --fs-unix-metadata is set")
+	fsUmask        = pflag.String("fs-umask", "022", "octal umask applied to new files when --fs-unix-metadata is set")
 
 	//go:embed static/motd
 	motd []byte
@@ -72,6 +79,12 @@ func main() {
 func run() error {
 	srv := New()
 
+	fsOpts, err := buildFSOptions()
+	if err != nil {
+		return err
+	}
+	srv.fsOpts = fsOpts
+
 	server := &ssh.Server{
 		Addr:    *bind,
 		Handler: srv.HandleSSH,
@@ -83,7 +96,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	slog.Info("listening", "bind", *bind, "timeout", *timeout, "sshPrivateKey", *sshPrivateKey, "sshPublicKey", *sshPublicKey)
+	slog.Info("listening", "bind", *bind, "timeout", *timeout, "sshPrivateKey", *sshPrivateKey, "sshPublicKey", *sshPublicKey, "unixMetadata", *fsUnixMetadata)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -132,12 +145,37 @@ func run() error {
 	return nil
 }
 
+// buildFSOptions resolves the --fs-* flags into s3fs options. When
+// --fs-unix-metadata is off it returns nil, so the filesystem behaves exactly as
+// it did before the feature existed.
+func buildFSOptions() ([]s3fs.Option, error) {
+	if !*fsUnixMetadata {
+		return nil, nil
+	}
+
+	uid, err := unixmeta.LookupUID(*fsUser)
+	if err != nil {
+		return nil, fmt.Errorf("--fs-user %q: %w", *fsUser, err)
+	}
+	gid, err := unixmeta.LookupGID(*fsGroup)
+	if err != nil {
+		return nil, fmt.Errorf("--fs-group %q: %w", *fsGroup, err)
+	}
+	umask, err := strconv.ParseUint(*fsUmask, 8, 32)
+	if err != nil {
+		return nil, fmt.Errorf("--fs-umask %q: must be octal: %w", *fsUmask, err)
+	}
+
+	return []s3fs.Option{s3fs.WithUnixMetadata(uid, gid, os.FileMode(umask))}, nil
+}
+
 type Server struct {
 	// sessions tracks in-flight HandleSSH invocations so shutdown can wait
 	// for each runKefka's deferred bucket cleanup to complete. gliderlabs/ssh's
 	// own connWg counts connection-loop goroutines, which return before the
 	// session handler goroutine does, so Server.Shutdown alone is not enough.
 	sessions sync.WaitGroup
+	fsOpts   []s3fs.Option
 }
 
 func New() *Server {
@@ -201,7 +239,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 		lg.Info("cleaned up bucket")
 	}()
 
-	fsys, err := s3fs.NewS3FS(client, sessBucket)
+	fsys, err := s3fs.NewS3FS(client, sessBucket, s.fsOpts...)
 	if err != nil {
 		return fmt.Errorf("can't setup s3fs: %w", err)
 	}

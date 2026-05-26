@@ -9,11 +9,28 @@ import (
 	"io/ioutil"
 	"os"
 	"syscall"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/tigrisdata/storage-go"
 	"go.uber.org/atomic"
+	"tangled.org/xeiaso.net/kefka/s3fs/unixmeta"
 )
+
+// newFileMetadata returns the x-amz-meta-* map to attach to a newly written
+// object, or nil when the Unix-metadata feature is disabled. New files take the
+// session's default owner and a mode of 0666 masked by the session umask.
+func newFileMetadata(cfg *unixMetaConfig) map[string]string {
+	if cfg == nil {
+		return nil
+	}
+	return unixmeta.Encode(unixmeta.Attrs{
+		UID:   cfg.uid,
+		GID:   cfg.gid,
+		Mode:  0o666 &^ cfg.umask,
+		Mtime: time.Now(),
+	})
+}
 
 const (
 	ModeMultipartUpload os.FileMode = fs.ModePerm + 1 // Custom os.FileMode for S3 multipart upload
@@ -133,23 +150,25 @@ func (f *s3ReadFile) Truncate(size int64) error {
 // Upon creation, a buffer is created to store the file contents. Upon close,
 // the file is uploaded to S3.
 type s3WriteFile struct {
-	client *storage.Client // s3 skd client
-	bucket string          // S3 bucket name
-	key    string          // File object's key in S3
-	closed bool            // Is the file closed?
-	buf    *bytes.Buffer   // Buffer for storing the file before it's uploaded
+	client   *storage.Client // s3 skd client
+	bucket   string          // S3 bucket name
+	key      string          // File object's key in S3
+	closed   bool            // Is the file closed?
+	buf      *bytes.Buffer   // Buffer for storing the file before it's uploaded
+	unixMeta *unixMetaConfig // optional POSIX attribute defaults (nil = disabled)
 }
 
 // newS3WriteFile creates a new s3ReadFile.
-func newS3WriteFile(client *storage.Client, bucket, key string) (*s3WriteFile, error) {
+func newS3WriteFile(client *storage.Client, bucket, key string, cfg *unixMetaConfig) (*s3WriteFile, error) {
 	// TODO: Validate the key
 	// ...
 
 	return &s3WriteFile{
-		client: client,
-		bucket: bucket,
-		key:    key,
-		buf:    bytes.NewBuffer(nil),
+		client:   client,
+		bucket:   bucket,
+		key:      key,
+		buf:      bytes.NewBuffer(nil),
+		unixMeta: cfg,
 	}, nil
 }
 
@@ -199,9 +218,10 @@ func (f *s3WriteFile) Close() error {
 	// Run the GetObject operation
 	// TODO: Currently `res` is not used. Should it be?
 	_, err := f.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: &f.bucket,
-		Key:    &f.key,
-		Body:   body,
+		Bucket:   &f.bucket,
+		Key:      &f.key,
+		Body:     body,
+		Metadata: newFileMetadata(f.unixMeta),
 	})
 	if err != nil {
 		return fmt.Errorf("unable to perform GetObject operation: %w", err)
@@ -237,17 +257,19 @@ type s3MultipartUploadFile struct {
 }
 
 // newS3MultipartUploadFile creates a new s3ReadFile.
-func newS3MultipartUploadFile(client *storage.Client, bucket, key string) (*s3MultipartUploadFile, error) {
+func newS3MultipartUploadFile(client *storage.Client, bucket, key string, cfg *unixMetaConfig) (*s3MultipartUploadFile, error) {
 	// TODO: Check if the file exists
 	// ...
 
 	// Create the context
 	ctx := context.TODO() // TODO: How can user-supplied contexts be supported?
 
-	// Run the GetObject operation
+	// Run the GetObject operation. POSIX attributes (if enabled) must be set
+	// now: CompleteMultipartUpload cannot attach user metadata.
 	res, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-		Bucket: &bucket,
-		Key:    &key,
+		Bucket:   &bucket,
+		Key:      &key,
+		Metadata: newFileMetadata(cfg),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("unable to create multipart upload: %w", err)
