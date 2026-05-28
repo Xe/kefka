@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v6"
 	"github.com/pborman/getopt/v2"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
@@ -205,8 +205,11 @@ func calculateSize(ec *command.ExecContext, fullPath, displayPath string, opts d
 		// For symlinks encountered during traversal: under -L we should
 		// follow them; under default/-H we count the link's own size.
 		entryPath := path.Join(fullPath, e.Name())
-		entrySize := e.Size()
-		if e.Mode()&fs.ModeSymlink != 0 && opts.followAll {
+		var entrySize int64
+		if info, ierr := e.Info(); ierr == nil {
+			entrySize = info.Size()
+		}
+		if e.Type()&fs.ModeSymlink != 0 && opts.followAll {
 			if linked, err := ec.FS.Stat(entryPath); err == nil {
 				if linked.IsDir() {
 					// Recurse into the linked directory.

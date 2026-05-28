@@ -3,8 +3,9 @@
 package s3fs
 
 import (
+	"bytes"
 	"context"
-	"errors"
+	"io/fs"
 	"os"
 	pathpkg "path"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 // ReadDir reads the directory named by dirname and returns a list of
 // directory entries sorted by filename.
-func (fs3 *S3FS) ReadDir(dir string) ([]os.FileInfo, error) {
+func (fs3 *S3FS) ReadDir(dir string) ([]fs.DirEntry, error) {
 	key := strings.TrimPrefix(fs3.cleanPath(dir), "/")
 	var prefix string
 	if key != "" && key != "." {
@@ -25,8 +26,8 @@ func (fs3 *S3FS) ReadDir(dir string) ([]os.FileInfo, error) {
 	ctx := context.TODO()
 
 	var ct *string
-	var dirs []os.FileInfo
-	var files []os.FileInfo
+	var dirs []fs.DirEntry
+	var files []fs.DirEntry
 	for {
 		res, err := fs3.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 			Bucket:            &fs3.bucket,
@@ -43,7 +44,7 @@ func (fs3 *S3FS) ReadDir(dir string) ([]os.FileInfo, error) {
 			if name == "" {
 				continue
 			}
-			dirs = append(dirs, newDirInfo(name))
+			dirs = append(dirs, fs.FileInfoToDirEntry(newDirInfo(name)))
 		}
 
 		for _, f := range res.Contents {
@@ -56,11 +57,13 @@ func (fs3 *S3FS) ReadDir(dir string) ([]os.FileInfo, error) {
 			if name == "" {
 				continue
 			}
-			files = append(files, newFileInfo(
-				pathpkg.Base(name),
-				aws.ToInt64(f.Size),
-				aws.ToTime(f.LastModified),
-			))
+			files = append(files,
+				fs.FileInfoToDirEntry(newFileInfo(
+					pathpkg.Base(name),
+					aws.ToInt64(f.Size),
+					aws.ToTime(f.LastModified),
+				)),
+			)
 		}
 
 		if !aws.ToBool(res.IsTruncated) {
@@ -77,5 +80,11 @@ func (fs3 *S3FS) ReadDir(dir string) ([]os.FileInfo, error) {
 // perm are used for all directories that MkdirAll creates. If path is/
 // already a directory, MkdirAll does nothing and returns nil.
 func (fs3 *S3FS) MkdirAll(filename string, perm os.FileMode) error {
-	return errors.New("not implemented")
+	_, err := fs3.client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket: new(fs3.bucket),
+		Key:    new(filename),
+		Body:   bytes.NewBuffer(nil),
+	})
+
+	return err
 }

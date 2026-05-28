@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-billy/v5/osfs"
+	"github.com/go-git/go-billy/v6/osfs"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 	"mvdan.cc/sh/v3/expand"

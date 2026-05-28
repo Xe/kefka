@@ -1,4 +1,4 @@
-// Package billyfs adapts a github.com/go-git/go-billy/v5 Filesystem into a
+// Package billyfs adapts a github.com/go-git/go-billy/v6 Filesystem into a
 // github.com/tetratelabs/wazero experimental/sys.FS so a WASI guest can read
 // and write through the billy filesystem.
 package billyfs
@@ -9,7 +9,7 @@ import (
 	stdfs "io/fs"
 	"os"
 
-	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v6"
 	expsys "github.com/tetratelabs/wazero/experimental/sys"
 	wsys "github.com/tetratelabs/wazero/sys"
 )
@@ -93,7 +93,7 @@ type billyFile struct {
 	expsys.UnimplementedFile
 	file       billy.File
 	fsys       billy.Filesystem
-	dirEntries []os.FileInfo
+	dirEntries []stdfs.DirEntry
 	dirRead    bool
 	dirOffset  int
 }
@@ -189,7 +189,7 @@ func (f *billyFile) Readdir(n int) ([]expsys.Dirent, expsys.Errno) {
 		info := f.dirEntries[f.dirOffset+i]
 		dirents = append(dirents, expsys.Dirent{
 			Name: info.Name(),
-			Type: info.Mode() & stdfs.ModeType,
+			Type: info.Type(),
 		})
 	}
 	f.dirOffset += count

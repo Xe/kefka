@@ -7,15 +7,14 @@ import (
 	"io"
 	"io/fs"
 	"math"
-	"os"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/go-git/go-billy/v5"
-	"github.com/go-git/go-billy/v5/util"
+	"github.com/go-git/go-billy/v6"
+	"github.com/go-git/go-billy/v6/util"
 	"github.com/pborman/getopt/v2"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command"
@@ -738,7 +737,7 @@ func listPath(ctx context.Context, ec *command.ExecContext, p string, opts lsOpt
 	}
 
 	names := make([]string, 0, len(dirEntries))
-	entryByName := make(map[string]os.FileInfo, len(dirEntries))
+	entryByName := make(map[string]fs.DirEntry, len(dirEntries))
 	for _, e := range dirEntries {
 		name := e.Name()
 		if !showHidden && strings.HasPrefix(name, ".") {
@@ -896,7 +895,7 @@ func listPath(ctx context.Context, ec *command.ExecContext, p string, opts lsOpt
 			if ok {
 				if entry.IsDir() {
 					isDir = true
-				} else if entry.Mode()&fs.ModeSymlink != 0 {
+				} else if entry.Type()&fs.ModeSymlink != 0 {
 					if einfo, e := ec.FS.Stat(path.Join(full, name)); e == nil && einfo.IsDir() {
 						isDir = true
 					}

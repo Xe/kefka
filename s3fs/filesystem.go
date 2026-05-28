@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"strings"
+	"sync"
 
-	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v6"
 	"github.com/tigrisdata/storage-go"
 )
 
@@ -27,6 +29,12 @@ type S3FS struct {
 	root      string
 	separator string
 	unixMeta  *unixMetaConfig
+
+	// temps holds TempFile-backed buffers keyed by canonical S3 key, so a
+	// subsequent Open of the same path returns a reader over the same bytes
+	// the writer is still appending to. See tempfs.go.
+	tempMu sync.Mutex
+	temps  map[string]*tempBuffer
 }
 
 // Option configures an S3FS at construction time.
@@ -54,6 +62,7 @@ func NewS3FS(client *storage.Client, bucket string, opts ...Option) (billy.Files
 		bucket:    bucket,
 		root:      "",
 		separator: DefaultSeparator,
+		temps:     make(map[string]*tempBuffer),
 	}
 	for _, opt := range opts {
 		opt(fs3)
@@ -78,4 +87,12 @@ func (fs3 *S3FS) cleanPath(p ...string) string {
 
 	// Return the full path
 	return path.Clean(f)
+}
+
+// key turns a root-relative billy path into the canonical S3 object key:
+// root-joined, cleaned, and stripped of the leading slash that S3 keys never
+// carry. All S3 operations must funnel through here so reads and writes agree
+// on the same key regardless of chroot depth.
+func (fs3 *S3FS) key(name string) string {
+	return strings.TrimPrefix(fs3.cleanPath(name), "/")
 }

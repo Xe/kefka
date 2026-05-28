@@ -79,7 +79,11 @@ func main() {
 		}
 		fmt.Printf("ReadDir(%q) -> %d entries:\n", p, len(entries))
 		for _, e := range entries {
-			fmt.Printf("  %s (dir=%v size=%d)\n", e.Name(), e.IsDir(), e.Size())
+			size := int64(-1)
+			if fi, err := e.Info(); err == nil {
+				size = fi.Size()
+			}
+			fmt.Printf("  %s (dir=%v size=%d)\n", e.Name(), e.IsDir(), size)
 		}
 	}
 

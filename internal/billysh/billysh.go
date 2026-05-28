@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v6"
 	"mvdan.cc/sh/v3/interp"
 	"tangled.org/xeiaso.net/kefka/command/registry"
 )
@@ -39,15 +39,7 @@ func FsysOpenHandler(reg *registry.Impl, fsys billy.Filesystem) interp.OpenHandl
 
 func FsysReadDirHandler(reg *registry.Impl, fsys billy.Filesystem) interp.ReadDirHandlerFunc2 {
 	return func(ctx context.Context, name string) ([]fs.DirEntry, error) {
-		entries, err := fsys.ReadDir(reg.Resolve(name))
-		if err != nil {
-			return nil, err
-		}
-		out := make([]fs.DirEntry, len(entries))
-		for i, e := range entries {
-			out[i] = fs.FileInfoToDirEntry(e)
-		}
-		return out, nil
+		return fsys.ReadDir(reg.Resolve(name))
 	}
 }
 

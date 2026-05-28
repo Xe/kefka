@@ -10,15 +10,15 @@ import (
 	"tangled.org/xeiaso.net/kefka/s3fs/unixmeta"
 )
 
-// FileStat is the value returned by s3FileInfo.Sys() when the Unix-metadata
-// feature is enabled. It carries the raw numeric owner and group so consumers
-// can resolve them to names however they like.
+// FileStat is the value returned by simpleFileInfo.Sys() when the
+// Unix-metadata feature is enabled. It carries the raw numeric owner and group
+// so consumers can resolve them to names however they like.
 type FileStat struct {
 	UID, GID uint32
 }
 
-// s3FileInfo implements os.FileInfo
-type s3FileInfo struct {
+// simpleFileInfo implements os.FileInfo
+type simpleFileInfo struct {
 	name    string
 	size    int64
 	mode    os.FileMode
@@ -27,7 +27,7 @@ type s3FileInfo struct {
 }
 
 func newFileInfo(name string, size int64, modTime time.Time) os.FileInfo {
-	return s3FileInfo{
+	return simpleFileInfo{
 		name:    name,
 		size:    size,
 		mode:    0666,
@@ -36,10 +36,10 @@ func newFileInfo(name string, size int64, modTime time.Time) os.FileInfo {
 }
 
 func newDirInfo(name string) os.FileInfo {
-	return s3FileInfo{
+	return simpleFileInfo{
 		name:    name,
 		mode:    fs.ModeDir,
-		modTime: time.Time{},
+		modTime: time.Now(),
 	}
 }
 
@@ -61,7 +61,7 @@ func newFileInfoFromHead(name string, head *s3.HeadObjectOutput, cfg *unixMetaCo
 		Mtime: modTime,
 	})
 
-	return s3FileInfo{
+	return simpleFileInfo{
 		name:    name,
 		size:    size,
 		mode:    attrs.Mode,
@@ -70,29 +70,27 @@ func newFileInfoFromHead(name string, head *s3.HeadObjectOutput, cfg *unixMetaCo
 	}
 }
 
-func (fi s3FileInfo) Name() string {
-	return fi.name
-}
-
-func (fi s3FileInfo) Size() int64 {
-	return fi.size
-}
-
-func (fi s3FileInfo) Mode() os.FileMode {
-	return fi.mode
-}
-
-func (fi s3FileInfo) IsDir() bool {
-	return fi.mode.IsDir()
-}
-
-func (fi s3FileInfo) Sys() any {
+func (fi simpleFileInfo) Name() string      { return fi.name }
+func (fi simpleFileInfo) Size() int64       { return fi.size }
+func (fi simpleFileInfo) Mode() os.FileMode { return fi.mode }
+func (fi simpleFileInfo) IsDir() bool       { return fi.mode.IsDir() }
+func (fi simpleFileInfo) Sys() any {
 	if fi.sys == nil {
 		return nil
 	}
 	return fi.sys
 }
+func (fi simpleFileInfo) ModTime() time.Time { return fi.modTime }
 
-func (fi s3FileInfo) ModTime() time.Time {
-	return fi.modTime
+type enrichedFileInfo struct {
+	s3.HeadObjectOutput
+	key  string
+	mode fs.FileMode
 }
+
+func (tfi enrichedFileInfo) Name() string       { return tfi.key }
+func (tfi enrichedFileInfo) Size() int64        { return *tfi.ContentLength }
+func (tfi enrichedFileInfo) Mode() fs.FileMode  { return tfi.mode }
+func (tfi enrichedFileInfo) ModTime() time.Time { return *tfi.LastModified }
+func (tfi enrichedFileInfo) IsDir() bool        { return tfi.mode.IsDir() }
+func (tfi enrichedFileInfo) Sys() any           { return &tfi.HeadObjectOutput }
