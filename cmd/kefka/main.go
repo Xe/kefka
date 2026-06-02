@@ -17,6 +17,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 	"tangled.org/xeiaso.net/kefka/command/registry"
 	"tangled.org/xeiaso.net/kefka/command/registry/coreutils"
+	"tangled.org/xeiaso.net/kefka/command/registry/uutils"
 	"tangled.org/xeiaso.net/kefka/command/registry/wasmprog"
 	"tangled.org/xeiaso.net/kefka/internal/billysh"
 )
@@ -43,6 +44,7 @@ func run(ctx context.Context) error {
 	reg := registry.New()
 	coreutils.Register(reg)
 	wasmprog.Register(reg)
+	uutils.Register(reg)
 
 	fsys := osfs.New(".")
 
