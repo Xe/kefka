@@ -29,6 +29,7 @@ import (
 	"tangled.org/xeiaso.net/kefka/cmd/sophia/commands/snapshot"
 	"tangled.org/xeiaso.net/kefka/command/registry"
 	"tangled.org/xeiaso.net/kefka/command/registry/coreutils"
+	"tangled.org/xeiaso.net/kefka/command/registry/uutils"
 	"tangled.org/xeiaso.net/kefka/command/registry/wasmprog"
 	"tangled.org/xeiaso.net/kefka/internal/billysh"
 	"tangled.org/xeiaso.net/kefka/s3fs"
@@ -202,6 +203,7 @@ func (s *Server) runKefka(sess ssh.Session, lg *slog.Logger) error {
 	reg := registry.New()
 	coreutils.Register(reg)
 	wasmprog.Register(reg)
+	uutils.Register(reg)
 
 	client, err := storage.New(sess.Context())
 	if err != nil {
