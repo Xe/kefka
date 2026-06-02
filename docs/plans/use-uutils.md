@@ -74,3 +74,75 @@ remain available via uutils.
      listing) after adding `uutils.Register`.
 5. Confirm a kept command still works through the internal path: `go run ./cmd/kefka tree`
    or `gzip`/`stat`.
+
+## Follow-up: pass the shell's working directory to uutils
+
+### Context
+
+After the migration above, `cd <dir>` followed by a relative-path uutils command did not
+work: `cd sub; cat hello.txt` looked for `/hello.txt` and failed. The shell tracks its
+current directory in `registry.Impl.pwd` (the `cd`/`pwd` builtins are intercepted in
+`internal/billysh/billysh.go` and routed through `registry.Chdir`) and propagates it as
+`ExecContext.Dir` (`command/registry/registry.go`), but the WASI guest never received it.
+
+A WASI guest resolves its own working directory before requesting files — wazero provides
+no host-side cwd, and `/` vs `.` both collapse to a single root mount. Worse, the embedded
+`coreutils.wasm` (from `419998e`) had **no working-directory support at all**: its `getcwd`
+returned "operation not supported" and it ignored `PWD`. That binary was built before
+`pwd-hack.patch` existed, so the chdir-at-startup hook was never compiled in.
+
+Approaches that don't work and why:
+
+- **`WithEnv("PWD", …)` alone** — the unpatched binary ignores `PWD` entirely.
+- **chroot the mount to `ec.Dir`** — makes relative paths work but breaks absolute paths:
+  `/sub/x` doubles to `/sub/sub/x` and `/` can no longer reach the fsys root. Also diverges
+  from the shell's own redirection handling, which resolves against the true root.
+
+### Changes
+
+#### 1. Rebuild `coreutils.wasm` with the cwd patch
+
+`command/uutils/pwd-hack.patch` adds an `.init_array` constructor to `src/bin/coreutils.rs`
+that calls `std::env::set_current_dir($PWD)` at startup. This works because Rust's
+`wasm32-wasip1` `chdir` maps to wasi-libc `chdir`, which sets the cwd used for relative
+path resolution. Fix `command/uutils/regen-coreutils.sh` to install the artifact (it built
+into `target/…` but never copied it back — leaving `coreutils.wasm` stale):
+
+```sh
+cp target/wasm32-wasip1/release/coreutils.wasm ../../coreutils.wasm
+```
+
+Regenerate: `cd command/uutils && ./regen-coreutils.sh` (clones uutils 0.9.0, applies the
+patch, builds for `wasm32-wasip1`, installs the embedded `coreutils.wasm`).
+
+#### 2. Hand the cwd to the guest as `PWD`
+
+- `command/command.go` — add `ExecContext.GuestPWD()`, mapping the fsys-relative `Dir` to
+  the absolute path the guest expects (`.` → `/`, `home/xe` → `/home/xe`), mirroring the
+  `pwd` builtin's formatting.
+- `command/uutils/uutils.go` — add `.WithEnv("PWD", ec.GuestPWD())` to the wazero
+  `ModuleConfig` so the patched binary chdir's into the shell's current directory at
+  startup. The mount stays at the true root `/`, so absolute paths remain correct.
+
+#### 3. Scope
+
+This covers the uutils coreutils binary only. The other WASM commands (`jq`, `rg`, `qjs`,
+`python3`) are separate upstream binaries without an equivalent chdir hook, so they still
+resolve relative paths against the root. Covering them needs per-binary build-side work.
+
+### Verification
+
+1. `go build ./...`, `go vet ./command/...`, `go test ./command/uutils/ ./command/...`.
+2. Regression test `command/uutils/uutils_test.go` (uses `osfs`, the production FS):
+   asserts `pwd` reflects `Dir`, relative paths resolve against cwd, absolute paths reach
+   the fsys root, and `/sub/x` does not double.
+3. End-to-end through the real shell:
+
+   ```text
+   cd <tmp-with-sub/greeting.txt> && go run ./cmd/kefka <<'EOF'
+   cd sub
+   pwd            # -> /sub
+   cat greeting.txt   # -> file contents (relative honors cwd)
+   cat /rootfile.txt  # -> reads fsys-root file (absolute still works)
+   EOF
+   ```

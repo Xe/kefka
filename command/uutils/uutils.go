@@ -54,7 +54,8 @@ func (i Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) 
 		WithStdout(ec.Stdout).
 		WithStderr(ec.Stderr).
 		WithArgs(append([]string{i.Name}, args...)...).
-		WithName("uutils::" + i.Name).
+		WithName("uutils::"+i.Name).
+		WithEnv("PWD", ec.GuestPWD()).
 		WithFSConfig(fsConfig).
 		WithSysNanosleep().
 		WithSysNanotime().

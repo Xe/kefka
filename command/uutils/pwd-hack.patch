@@ -1,0 +1,22 @@
+diff --git a/src/bin/coreutils.rs b/src/bin/coreutils.rs
+index f45178025..2289b3f28 100644
+--- a/src/bin/coreutils.rs
++++ b/src/bin/coreutils.rs
+@@ -16,6 +16,17 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
+ 
+ include!(concat!(env!("OUT_DIR"), "/uutils_map.rs"));
+ 
++#[used]
++#[unsafe(link_section = ".init_array")]
++static INIT_CWD: extern "C" fn() = {
++    extern "C" fn kefka_hack_init_pwd() {
++        if let Ok(pwd) = std::env::var("PWD") {
++            let _ = std::env::set_current_dir(pwd);
++        }
++    }
++    kefka_hack_init_pwd
++};
++
+ fn usage<T>(utils: &UtilityMap<T>, name: &str) {
+     let display_list = utils.keys().copied().join(", ");
+     let width = cmp::min(textwrap::termwidth(), 100) - 8; // (opinion/heuristic) max 100 chars wide with 4 character side indentions
