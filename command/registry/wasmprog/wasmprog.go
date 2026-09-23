@@ -1,6 +1,7 @@
 package wasmprog
 
 import (
+	"tangled.org/xeiaso.net/kefka/command/internal/jo"
 	"tangled.org/xeiaso.net/kefka/command/internal/jq"
 	"tangled.org/xeiaso.net/kefka/command/internal/python3"
 	"tangled.org/xeiaso.net/kefka/command/internal/qjs"
@@ -14,6 +15,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("python3", python3.Impl{})
 
 	reg.Register("qjs", qjs.Impl{})
+	reg.Register("jo", jo.Impl{})
 	reg.Register("jq", jq.Impl{})
 	reg.Register("rg", rg.Impl{})
 }
