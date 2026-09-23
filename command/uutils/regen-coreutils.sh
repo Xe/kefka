@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-COREUTILS_VERSION=0.9.0
+COREUTILS_VERSION=0.12.0
 
 rm -rf var
 mkdir -p var
