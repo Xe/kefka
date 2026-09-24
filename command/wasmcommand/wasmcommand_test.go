@@ -9,7 +9,7 @@ import (
 	"github.com/go-git/go-billy/v6/memfs"
 )
 
-func TestNew(t *testing.T) {
+func TestExec(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -39,29 +39,31 @@ func TestNew(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			impl, err := New("testcmd", tt.wasm)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("New() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err != nil {
-				return
+			impl := New("testcmd", tt.wasm)
+			if impl.compiled != nil {
+				t.Fatal("New() compiled the module, want compile deferred to Exec")
 			}
 
-			var stdout, stderr bytes.Buffer
-			err = impl.Exec(context.Background(), &command.ExecContext{
-				Stdin:  bytes.NewReader(nil),
-				Stdout: &stdout,
-				Stderr: &stderr,
-				FS:     memfs.New(),
-			}, []string{"argument"})
-			if err != nil {
-				t.Fatalf("Exec() error = %v, want nil", err)
-			}
-			if got := stdout.String(); got != "" {
-				t.Errorf("stdout = %q, want empty", got)
-			}
-			if got := stderr.String(); got != "" {
-				t.Errorf("stderr = %q, want empty", got)
+			for run := range 2 {
+				var stdout, stderr bytes.Buffer
+				err := impl.Exec(context.Background(), &command.ExecContext{
+					Stdin:  bytes.NewReader(nil),
+					Stdout: &stdout,
+					Stderr: &stderr,
+					FS:     memfs.New(),
+				}, []string{"argument"})
+				if (err != nil) != tt.wantErr {
+					t.Fatalf("Exec() run %d error = %v, wantErr %v", run, err, tt.wantErr)
+				}
+				if err != nil {
+					continue
+				}
+				if got := stdout.String(); got != "" {
+					t.Errorf("stdout = %q, want empty", got)
+				}
+				if got := stderr.String(); got != "" {
+					t.Errorf("stderr = %q, want empty", got)
+				}
 			}
 		})
 	}

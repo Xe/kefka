@@ -11,15 +11,7 @@ import (
 //go:embed jq.wasm
 var jqWASM []byte
 
-var commandImpl = mustNew()
-
-func mustNew() *wasmcommand.Impl {
-	impl, err := wasmcommand.New("jq", jqWASM)
-	if err != nil {
-		panic(err)
-	}
-	return impl
-}
+var commandImpl = wasmcommand.New("jq", jqWASM)
 
 type Impl struct{}
 

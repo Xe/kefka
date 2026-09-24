@@ -4,6 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"fmt"
+	"sync"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/experimental/sysfs"
@@ -18,25 +20,44 @@ import (
 var rgWASM []byte
 
 var (
-	runtime  wazero.Runtime
-	compiled wazero.CompiledModule
+	compileOnce sync.Once
+	runtime     wazero.Runtime
+	compiled    wazero.CompiledModule
+	compileErr  error
 )
 
-func init() {
-	ctx := context.Background()
-	runtime = wazero.NewRuntime(ctx)
-	wasi_snapshot_preview1.MustInstantiate(ctx, runtime)
+// compile creates the runtime and compiles the embedded program on first
+// use, so that importing this package does not pay the compile cost.
+func compile() error {
+	compileOnce.Do(func() {
+		ctx := context.Background()
+		r := wazero.NewRuntime(ctx)
+		if _, err := wasi_snapshot_preview1.Instantiate(ctx, r); err != nil {
+			_ = r.Close(ctx)
+			compileErr = err
+			return
+		}
 
-	var err error
-	compiled, err = runtime.CompileModule(ctx, rgWASM)
-	if err != nil {
-		panic(err)
-	}
+		c, err := r.CompileModule(ctx, rgWASM)
+		if err != nil {
+			_ = r.Close(ctx)
+			compileErr = err
+			return
+		}
+
+		runtime = r
+		compiled = c
+	})
+	return compileErr
 }
 
 type Impl struct{}
 
 func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) error {
+	if err := compile(); err != nil {
+		return fmt.Errorf("rg: can't compile wasm: %w", err)
+	}
+
 	fsConfig := wazero.NewFSConfig().(sysfs.FSConfig).
 		WithSysFSMount(billyfs.New(ec.FS), "/")
 
