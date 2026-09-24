@@ -9,17 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xe/kefka/billysh"
+	"github.com/Xe/kefka/command/registry"
+	"github.com/Xe/kefka/command/registry/coreutils"
+	"github.com/Xe/kefka/command/registry/uutils"
+	"github.com/Xe/kefka/command/registry/wasmprog"
 	"github.com/go-git/go-billy/v6/osfs"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
-	"github.com/Xe/kefka/command/registry"
-	"github.com/Xe/kefka/command/registry/coreutils"
-	"github.com/Xe/kefka/command/registry/uutils"
-	"github.com/Xe/kefka/command/registry/wasmprog"
-	"github.com/Xe/kefka/internal/billysh"
 )
 
 var (

@@ -1,3 +1,5 @@
+// Package billysh adapts a billy filesystem for use with mvdan.cc/sh's
+// interpreter.
 package billysh
 
 import (
@@ -7,11 +9,12 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/Xe/kefka/command/registry"
 	"github.com/go-git/go-billy/v6"
 	"mvdan.cc/sh/v3/interp"
-	"github.com/Xe/kefka/command/registry"
 )
 
+// FsysStatHandler resolves stat requests against the registry's filesystem.
 func FsysStatHandler(reg *registry.Impl, fsys billy.Filesystem) interp.StatHandlerFunc {
 	return func(ctx context.Context, name string, followSymlinks bool) (fs.FileInfo, error) {
 		resolved := reg.Resolve(name)
@@ -24,6 +27,7 @@ func FsysStatHandler(reg *registry.Impl, fsys billy.Filesystem) interp.StatHandl
 	}
 }
 
+// FsysOpenHandler opens files for reading and rejects write requests.
 func FsysOpenHandler(reg *registry.Impl, fsys billy.Filesystem) interp.OpenHandlerFunc {
 	return func(ctx context.Context, name string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
 		if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_APPEND|os.O_TRUNC) != 0 {
@@ -37,6 +41,7 @@ func FsysOpenHandler(reg *registry.Impl, fsys billy.Filesystem) interp.OpenHandl
 	}
 }
 
+// FsysReadDirHandler resolves directory reads against the registry's filesystem.
 func FsysReadDirHandler(reg *registry.Impl, fsys billy.Filesystem) interp.ReadDirHandlerFunc2 {
 	return func(ctx context.Context, name string) ([]fs.DirEntry, error) {
 		return fsys.ReadDir(reg.Resolve(name))

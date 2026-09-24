@@ -47,7 +47,7 @@ can re-enter the shell via `Runner.Subshell()`). Return exit codes as
 
 **Registry** (`command/registry`) owns the `name -> Execer` map and the
 fsys-relative `pwd`. Pwd is registry state, not interp state: interp's `Dir`
-is host-rooted and unsafe here, so `internal/billysh.CallHandler` intercepts
+is host-rooted and unsafe here, so `billysh.CallHandler` intercepts
 `cd` and `pwd` before interp's builtins. `reg.Resolve(p)` clamps paths to
 the fsys root.
 
