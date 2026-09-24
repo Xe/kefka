@@ -82,7 +82,7 @@ remain available via uutils.
 After the migration above, `cd <dir>` followed by a relative-path uutils command did not
 work: `cd sub; cat hello.txt` looked for `/hello.txt` and failed. The shell tracks its
 current directory in `registry.Impl.pwd` (the `cd`/`pwd` builtins are intercepted in
-`internal/billysh/billysh.go` and routed through `registry.Chdir`) and propagates it as
+`billysh/billysh.go` and routed through `registry.Chdir`) and propagates it as
 `ExecContext.Dir` (`command/registry/registry.go`), but the WASI guest never received it.
 
 A WASI guest resolves its own working directory before requesting files — wazero provides

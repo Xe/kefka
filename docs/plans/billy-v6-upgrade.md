@@ -46,7 +46,7 @@ grep -rl 'go-git/go-billy/v5' --include='*.go' | xargs sed -i 's#go-git/go-billy
 ```
 
 Representative files: `cmd/kefka/main.go` (osfs), `command/command.go`, `command/registry/registry.go`,
-`internal/billysh/billysh.go`, `wasm/billyfs/billyfs.go`, the 9 command dirs that import billy
+`billysh/billysh.go`, `wasm/billyfs/billyfs.go`, the 9 command dirs that import billy
 (`cp`, `du`, `file`, `ls`, `mkdir`, `pwd`, `readlink`, `rm`, `touch`), and all `*_test.go` using `memfs`.
 
 ### 3. Full s3fs port (replace kefka's with objgit's)
@@ -87,7 +87,7 @@ These call `billy.Filesystem.ReadDir`, now `[]fs.DirEntry`:
   from separate `ec.FS.Stat()` calls and are unaffected.
 - **`wasm/billyfs/billyfs.go`**: field `dirEntries []os.FileInfo` (line 96) → `[]stdfs.DirEntry`;
   line 192 `Type: info.Mode() & stdfs.ModeType` → `Type: info.Type()`. (`os` stays used elsewhere.)
-- **`internal/billysh/billysh.go`** `FsysReadDirHandler` (40–52): `ReadDir` already returns
+- **`billysh/billysh.go`** `FsysReadDirHandler` (40–52): `ReadDir` already returns
   `[]fs.DirEntry`, so collapse the body to `return fsys.ReadDir(reg.Resolve(name))` (drop the
   `fs.FileInfoToDirEntry` loop).
 - **`cmd/s3fs-test/main.go:82`**: replace `e.Size()` on the ReadDir entry with a guarded
