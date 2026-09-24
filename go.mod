@@ -1,4 +1,4 @@
-module tangled.org/xeiaso.net/kefka
+module github.com/Xe/kefka
 
 go 1.26.2
 
