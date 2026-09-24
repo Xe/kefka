@@ -16,7 +16,6 @@ jobs:
       - name: Check out source and WASM modules
         uses: actions/checkout@v7
         with:
-          lfs: true
           persist-credentials: false
 
       - name: Set up Go
