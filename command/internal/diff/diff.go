@@ -15,7 +15,7 @@ import (
 	"github.com/pborman/getopt/v2"
 	"github.com/pmezard/go-difflib/difflib"
 	"mvdan.cc/sh/v3/interp"
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 type Impl struct{}

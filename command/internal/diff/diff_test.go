@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/memfs"
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 const fixedStamp = "2024-01-02 03:04:05.000000000 +0000"

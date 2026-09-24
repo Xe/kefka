@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-git/go-billy/v6"
 	"mvdan.cc/sh/v3/interp"
-	"tangled.org/xeiaso.net/kefka/command/registry"
+	"github.com/Xe/kefka/command/registry"
 )
 
 func FsysStatHandler(reg *registry.Impl, fsys billy.Filesystem) interp.StatHandlerFunc {

@@ -15,7 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/tigrisdata/storage-go"
 	"go.uber.org/atomic"
-	"tangled.org/xeiaso.net/kefka/s3fs/unixmeta"
+	"github.com/Xe/kefka/s3fs/unixmeta"
 )
 
 // newFileMetadata returns the x-amz-meta-* map to attach to a newly written

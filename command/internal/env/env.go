@@ -20,7 +20,7 @@ import (
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 type Impl struct{}

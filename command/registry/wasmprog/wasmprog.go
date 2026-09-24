@@ -1,12 +1,12 @@
 package wasmprog
 
 import (
-	"tangled.org/xeiaso.net/kefka/command/internal/jo"
-	"tangled.org/xeiaso.net/kefka/command/internal/jq"
-	"tangled.org/xeiaso.net/kefka/command/internal/python3"
-	"tangled.org/xeiaso.net/kefka/command/internal/qjs"
-	"tangled.org/xeiaso.net/kefka/command/internal/rg"
-	"tangled.org/xeiaso.net/kefka/command/registry"
+	"github.com/Xe/kefka/command/internal/jo"
+	"github.com/Xe/kefka/command/internal/jq"
+	"github.com/Xe/kefka/command/internal/python3"
+	"github.com/Xe/kefka/command/internal/qjs"
+	"github.com/Xe/kefka/command/internal/rg"
+	"github.com/Xe/kefka/command/registry"
 )
 
 func Register(reg *registry.Impl) {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 func run(t *testing.T, args []string) (string, string, error) {

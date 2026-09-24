@@ -13,7 +13,7 @@ import (
 
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 // Impl times the execution of another command.

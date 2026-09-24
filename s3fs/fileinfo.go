@@ -7,7 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"tangled.org/xeiaso.net/kefka/s3fs/unixmeta"
+	"github.com/Xe/kefka/s3fs/unixmeta"
 )
 
 // FileStat is the value returned by simpleFileInfo.Sys() when the

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 type fakeLister struct {

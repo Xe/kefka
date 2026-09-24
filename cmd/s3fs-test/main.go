@@ -11,8 +11,8 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/tigrisdata/storage-go"
-	"tangled.org/xeiaso.net/kefka/s3fs"
-	"tangled.org/xeiaso.net/kefka/s3fs/unixmeta"
+	"github.com/Xe/kefka/s3fs"
+	"github.com/Xe/kefka/s3fs/unixmeta"
 
 	_ "github.com/joho/godotenv/autoload"
 )

@@ -13,8 +13,8 @@ import (
 	"github.com/go-git/go-billy/v6/memfs"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
-	"tangled.org/xeiaso.net/kefka/command"
-	"tangled.org/xeiaso.net/kefka/command/registry"
+	"github.com/Xe/kefka/command"
+	"github.com/Xe/kefka/command/registry"
 )
 
 // envEchoImpl prints its env (via ec.Environ) one NAME=VALUE per line, sorted.

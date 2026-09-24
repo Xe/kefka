@@ -9,7 +9,7 @@ import (
 	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/memfs"
 	gzlib "compress/gzip"
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 func newFS(t *testing.T) billy.Filesystem {

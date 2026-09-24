@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/go-git/go-billy/v6/osfs"
-	"tangled.org/xeiaso.net/kefka/command"
-	"tangled.org/xeiaso.net/kefka/command/uutils"
+	"github.com/Xe/kefka/command"
+	"github.com/Xe/kefka/command/uutils"
 )
 
 // TestExec_WorkingDirectory verifies that ec.Dir flows through to the WASI guest

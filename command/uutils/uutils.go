@@ -10,8 +10,8 @@ import (
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	wsys "github.com/tetratelabs/wazero/sys"
 	"mvdan.cc/sh/v3/interp"
-	"tangled.org/xeiaso.net/kefka/command"
-	"tangled.org/xeiaso.net/kefka/wasm/billyfs"
+	"github.com/Xe/kefka/command"
+	"github.com/Xe/kefka/wasm/billyfs"
 )
 
 //go:embed coreutils.wasm

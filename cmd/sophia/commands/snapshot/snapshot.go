@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/tigrisdata/storage-go"
 	"mvdan.cc/sh/v3/interp"
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 type Impl struct {

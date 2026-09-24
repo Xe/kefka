@@ -9,7 +9,7 @@ import (
 
 	"github.com/pborman/getopt/v2"
 	"mvdan.cc/sh/v3/interp"
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 // Lister reports the names of registered commands. The registry satisfies

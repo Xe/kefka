@@ -1,8 +1,8 @@
 package uutils
 
 import (
-	"tangled.org/xeiaso.net/kefka/command/registry"
-	"tangled.org/xeiaso.net/kefka/command/uutils"
+	"github.com/Xe/kefka/command/registry"
+	"github.com/Xe/kefka/command/uutils"
 )
 
 func Register(reg *registry.Impl) {

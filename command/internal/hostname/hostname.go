@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 type Impl struct{}

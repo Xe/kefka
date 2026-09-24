@@ -13,7 +13,7 @@ import (
 
 	"github.com/pborman/getopt/v2"
 	"mvdan.cc/sh/v3/interp"
-	"tangled.org/xeiaso.net/kefka/command"
+	"github.com/Xe/kefka/command"
 )
 
 type Impl struct{}
