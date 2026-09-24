@@ -7,7 +7,6 @@ import (
 	"github.com/Xe/kefka/command/internal/diff"
 	"github.com/Xe/kefka/command/internal/du"
 	"github.com/Xe/kefka/command/internal/env"
-	"github.com/Xe/kefka/command/internal/expr"
 	"github.com/Xe/kefka/command/internal/file"
 	"github.com/Xe/kefka/command/internal/gunzip"
 	"github.com/Xe/kefka/command/internal/gzip"
@@ -29,7 +28,6 @@ func Register(reg *registry.Impl) {
 	reg.Register("diff", diff.Impl{})
 	reg.Register("du", du.Impl{})
 	reg.Register("env", env.Impl{})
-	reg.Register("expr", expr.Impl{})
 	reg.Register("file", file.Impl{})
 	reg.Register("gunzip", gunzip.Impl{})
 	reg.Register("gzip", gzip.Impl{})
