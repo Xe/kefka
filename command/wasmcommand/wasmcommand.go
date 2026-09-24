@@ -4,6 +4,8 @@ package wasmcommand
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 
 	"github.com/Xe/kefka/command"
 	"github.com/Xe/kefka/wasm/billyfs"
@@ -14,33 +16,54 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
-// Impl runs a compiled WASI program as a Kefka command.
+// Impl runs a WASI program as a Kefka command. The program is compiled
+// on the first call to Exec, not when the Impl is created.
 type Impl struct {
-	name     string
+	name string
+	wasm []byte
+
+	once     sync.Once
 	runtime  wazero.Runtime
 	compiled wazero.CompiledModule
+	err      error
 }
 
-// New compiles wasm and prepares it to run as a command named name.
-func New(name string, wasm []byte) (*Impl, error) {
-	ctx := context.Background()
-	runtime := wazero.NewRuntime(ctx)
-	if _, err := wasi_snapshot_preview1.Instantiate(ctx, runtime); err != nil {
-		_ = runtime.Close(ctx)
-		return nil, err
-	}
+// New prepares wasm to run as a command named name. Compilation errors are
+// returned by Exec.
+func New(name string, wasm []byte) *Impl {
+	return &Impl{name: name, wasm: wasm}
+}
 
-	compiled, err := runtime.CompileModule(ctx, wasm)
-	if err != nil {
-		_ = runtime.Close(ctx)
-		return nil, err
-	}
+// compile creates the runtime and compiles the program exactly once.
+func (i *Impl) compile() error {
+	i.once.Do(func() {
+		ctx := context.Background()
+		runtime := wazero.NewRuntime(ctx)
+		if _, err := wasi_snapshot_preview1.Instantiate(ctx, runtime); err != nil {
+			_ = runtime.Close(ctx)
+			i.err = err
+			return
+		}
 
-	return &Impl{name: name, runtime: runtime, compiled: compiled}, nil
+		compiled, err := runtime.CompileModule(ctx, i.wasm)
+		if err != nil {
+			_ = runtime.Close(ctx)
+			i.err = err
+			return
+		}
+
+		i.runtime = runtime
+		i.compiled = compiled
+	})
+	return i.err
 }
 
 // Exec runs the command with stdio, arguments, and filesystem from ec.
 func (i *Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) error {
+	if err := i.compile(); err != nil {
+		return fmt.Errorf("wasmcommand: can't compile %s: %w", i.name, err)
+	}
+
 	fsConfig := wazero.NewFSConfig().(sysfs.FSConfig).
 		WithSysFSMount(billyfs.New(ec.FS), "/")
 

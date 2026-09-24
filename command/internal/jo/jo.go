@@ -11,15 +11,7 @@ import (
 //go:embed jo.wasm
 var joWASM []byte
 
-var commandImpl = mustNew()
-
-func mustNew() *wasmcommand.Impl {
-	impl, err := wasmcommand.New("jo", joWASM)
-	if err != nil {
-		panic(err)
-	}
-	return impl
-}
+var commandImpl = wasmcommand.New("jo", joWASM)
 
 type Impl struct{}
 
