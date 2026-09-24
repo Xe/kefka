@@ -83,3 +83,5 @@ wazero's `experimental/sys.FS`.
 - Match GNU coreutils / just-bash byte-for-byte. Stderr is
   `<name>: <arg>: <reason>\n`. Do not leak `%v` of `*os.PathError`.
 - ASCII only. Stage files explicitly; never `git add -A`.
+- If you add or update a `.wasm` blob, run `wasm/shrink.sh` on it before
+  you commit. The script needs binaryen, wabt, and wasm-tools.
