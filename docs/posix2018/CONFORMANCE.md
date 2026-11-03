@@ -2,9 +2,10 @@
 
 > **Audit date:** 2026-04-30
 > **Grep update:** 2026-11-03, after the just-bash port and PR review fixes
-> **Scope:** All 43 utilities documented under `docs/posix2018/*.md`
+> **Scope:** All 44 utilities documented under `docs/posix2018/*.md`
 > plus the POSIX `tee` (registered without a local spec doc) and 17
-> non-POSIX extras shipped under `command/internal/`.
+> non-POSIX extras shipped under `command/internal/`. The `find`
+> entry was added on 2026-11-03.
 > **Method:** read each spec doc, read the matching implementation
 > in `command/internal/<pkg>/*.go`, read the matching `_test.go`,
 > record deviations, test gaps, and notes with `file:line` and
@@ -74,6 +75,7 @@ common path; none ≈ no test file at all).
 | expr | yes | 🟡 | adequate | Regex is Go-flavored, not BRE; string compare not collation-aware |
 | false | yes | 🟠 | **none** | Likely conforming but no test file |
 | file | yes | 🟠 | partial | Extension-based only; `-M`/`-m` missing |
+| find | yes | 🟠 | adequate | `-exec ;` is always true; `-L`, `-ok`, symbolic `-perm`, owner and time primaries missing |
 | fold | yes | 🟠 | adequate | CR handling wrong; tab-stop indexing wrong; not locale-aware |
 | grep | yes | Major | partial | just-bash port; missing `-s`, stdin listing and regex gaps; see deep dive |
 | head | yes | 🟡 | adequate | Ships GNU `-c`/`-q`/`-v` (POSIX RATIONALE omits `-c`); adds trailing newline |
@@ -647,6 +649,84 @@ steps. Add tests for the edge cases `dirname //`, `dirname ""`,
 - A truly POSIX-compliant `file` requires a magic-number engine.
   This is a substantial body of work; consider documenting
   kefka's `file` as best-effort and not POSIX-compliant.
+
+### `find`
+
+**Implementation:** `command/internal/find/` (1,945 lines in 6 files,
+ported from just-bash)
+**Test file:** present (`find_test.go`, `find_unix_test.go`)
+**Severity:** 🟠 Major
+
+**Spec options (find.md OPTIONS):**
+- `-H`: implemented
+- `-L`: **missing**. find refuses it with `find: -L is not supported`
+  (`find.go:98`). Loop detection needs inode numbers, and billy does
+  not supply them.
+- `-P`: **extra (GNU, not-in-POSIX)**. This is the default.
+
+**Spec primaries (find.md OPERANDS):**
+- `-name`, `-path`, `-prune`, `-print`, `-newer`, `-depth`, `-xdev`,
+  `-perm [-]onum`, `-size n[c]`, `-mtime`: implemented
+- `-type`: implemented for all seven letters (`b c d f l p s`)
+- `-exec ... ;` and `-exec ... {} +`: implemented, with one deviation
+  (below)
+- `-perm [-]mode` in symbolic form: **missing**. Only octal works.
+- `-ok`: **missing**
+- `-atime`, `-ctime`, `-links`, `-user`, `-group`, `-nouser`,
+  `-nogroup`: **missing**. A billy `FileInfo` gives only the size,
+  the mode, and the modification time. The sandbox has no user
+  database.
+- `( )`, `!`, `-a`, `-o`: implemented, with the spec precedence and
+  short-circuit evaluation
+- Extras (not-in-POSIX): `-iname`, `-ipath`, `-regex`, `-iregex`,
+  `-empty`, `-maxdepth`, `-mindepth`, `-not`, `-and`, `-or`,
+  `-print0`, `-printf`, `-delete`, `-perm /mode`, the `k`, `M`, `G`,
+  and `b` suffixes of `-size`, and `--help`.
+
+**Deviations:**
+- `-exec ... ;` always evaluates as true (`matcher.go:82`). The spec
+  (`find.md` line 229) makes it true only when the utility exits 0.
+  The cause is the just-bash design: find collects the actions during
+  the walk and runs them after the walk. As a result,
+  `find . -exec test -s {} \; -print` prints every file.
+- When an `-exec ... ;` utility fails, find exits with the status of
+  that utility (`find.go:521`). The spec gives a non-zero status only
+  for an error in find. GNU and BSD find exit 0 in this case.
+- When the `-newer` reference file does not exist, `-newer` matches
+  nothing and find writes no diagnostic (`find.go:160`). GNU and BSD
+  find write an error and exit 1.
+- Pattern matching (`matcher.go:277`) has no equivalence classes
+  (`[=a=]`), no collating symbols (`[.a.]`), and no locale support
+  (see cross-cutting #1).
+- The scan for path operands also stops at `)`, `\(`, and `\)`
+  (`find.go:114`). The spec names only `-`, `!`, and `(`.
+
+**Required tests:**
+- `find . -exec false \; -print` prints nothing. (Today this test
+  fails: the bug.)
+- `find . -perm -u+x` matches the same files as `find . -perm -100`.
+  (Today find rejects the symbolic mode.)
+- `find -L .` follows a symlink to a directory, and writes a
+  diagnostic for a symlink to an ancestor.
+- `printf 'y\n' | find . -name a -ok rm {} \;` removes `a`. With `n`,
+  it does not.
+
+**Notes:**
+- This audit corrected these deviations on 2026-11-03: trailing
+  slashes on path operands (spec EXAMPLES 10), the `-mtime` remainder,
+  block rounding for `-size +n` and `-size -n`, the setuid, setgid,
+  and sticky bits in `-perm`, the `+` terminator of `-exec`, and the
+  missing `-type` letters. It also added `-H`, `--`, and `-xdev`.
+- `-xdev` compares device numbers only when the filesystem supplies
+  them: osfs on Unix (`device_unix.go:12`). memfs and s3fs are one
+  device, so `-xdev` has no effect on them.
+- For a symlink, `-perm` uses the mode of the link. The spec makes
+  this implementation-defined.
+- `-exec ... {} +` runs each set as one call. Commands run in the same
+  process, so the `{ARG_MAX}` limit does not apply.
+- To correct `-exec ... ;` and add `-ok`, find must run `-exec` during
+  the walk, not after it. This changes the output order that just-bash
+  defines, so it needs a decision first.
 
 ### `fold`
 

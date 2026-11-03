@@ -8,6 +8,7 @@ import (
 	"github.com/Xe/kefka/command/internal/du"
 	"github.com/Xe/kefka/command/internal/env"
 	"github.com/Xe/kefka/command/internal/file"
+	"github.com/Xe/kefka/command/internal/find"
 	"github.com/Xe/kefka/command/internal/grep"
 	"github.com/Xe/kefka/command/internal/gunzip"
 	"github.com/Xe/kefka/command/internal/gzip"
@@ -32,6 +33,7 @@ func Register(reg *registry.Impl) {
 	reg.Register("env", env.Impl{})
 	reg.Register("fgrep", grep.Fgrep{})
 	reg.Register("file", file.Impl{})
+	reg.Register("find", find.Impl{})
 	reg.Register("grep", grep.Impl{})
 	reg.Register("gunzip", gunzip.Impl{})
 	reg.Register("gzip", gzip.Impl{})
