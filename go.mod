@@ -6,6 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.100.1
 	github.com/aws/smithy-go v1.25.1
+	github.com/dlclark/regexp2/v2 v2.12.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-billy/v6 v6.0.0-alpha.1
 	github.com/google/uuid v1.6.0
