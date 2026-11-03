@@ -1,6 +1,7 @@
 # POSIX 2018 Conformance Audit
 
 > **Audit date:** 2026-04-30
+> **Grep update:** 2026-11-03, after the just-bash port and PR review fixes
 > **Scope:** All 43 utilities documented under `docs/posix2018/*.md`
 > plus the POSIX `tee` (registered without a local spec doc) and 17
 > non-POSIX extras shipped under `command/internal/`.
@@ -74,7 +75,7 @@ common path; none ≈ no test file at all).
 | false | yes | 🟠 | **none** | Likely conforming but no test file |
 | file | yes | 🟠 | partial | Extension-based only; `-M`/`-m` missing |
 | fold | yes | 🟠 | adequate | CR handling wrong; tab-stop indexing wrong; not locale-aware |
-| grep | **no** | ⛔ | n/a | Not registered. High-priority gap |
+| grep | yes | Major | partial | just-bash port; missing `-s`, stdin listing and regex gaps; see deep dive |
 | head | yes | 🟡 | adequate | Ships GNU `-c`/`-q`/`-v` (POSIX RATIONALE omits `-c`); adds trailing newline |
 | join | yes | ⬜ | adequate | Conformant |
 | ln | **no** | ⛔ | n/a | Not registered |
@@ -213,10 +214,11 @@ mandated for:
 - `expr`: 0 = nonzero/nonempty, 1 = zero/empty, 2 = invalid expr,
   3 = other error. Verify the impl's mapping (`expr.go:57-59`,
   276) — looks right but should be tested explicitly.
-- `grep`: 0 = match, 1 = no match, 2 = error. Not implemented.
+- `grep`: normally 0 = match, 1 = no match, 2 = error. Unknown
+  options incorrectly return 1. See the grep deep dive.
 
-Add explicit "exit code on error" tests for these four (only two
-are implemented today: `diff` and `expr`).
+Keep explicit "exit code on error" tests for these four commands.
+`diff`, `expr`, and `grep` are implemented.
 
 ### 7. Unicode / rune vs byte
 
@@ -245,14 +247,12 @@ in `command/registry/coreutils/coreutils.go`.
 | `cal` | small (~5KB) | 1–2 days | Calendar printing; rarely used by scripts |
 | `chmod` | medium (~21KB) | 3–5 days | Permission management; **critical** for any shell environment. Octal *and* symbolic mode (`u=rwx,g+r`, etc.). |
 | `df` | small (~6KB) | 1–2 days | Filesystem usage; partial-info OK in a virtual FS |
-| `grep` | large (~15KB) | 1–2 weeks | Search via BRE/ERE; **critical** for scripts. `-E`, `-F`, `-c`, `-l`, `-q`, `-i`, `-n`, `-s`, `-v`, `-x`, `-e`, `-f` all required |
 | `ln` | medium (~9KB) | 2–4 days | Hard and symbolic links; needs `billy.Symlink` capability |
 | `more` | medium (~10KB) | 3–5 days | Pager. Interactive — possibly out of scope for a batch shell environment |
 | `patch` | large (~25KB) | 1–2 weeks | Apply diff output. Complex format support (`-c`, `-u`, `-e`, `-l`, `-N`, `-R`) |
 
-The two most consequential gaps are **`chmod`** and **`grep`** —
-their absence means scripted shell workflows that touch
-permissions or text search cannot run unmodified.
+The missing `chmod` command blocks permission changes in scripts.
+`grep` is now registered, but its POSIX gaps still affect text searches.
 
 ---
 
@@ -594,7 +594,7 @@ steps. Add tests for the edge cases `dirname //`, `dirname ""`,
 
 **Notes:**
 - The BRE→Go-regex translation could live in a shared helper
-  (also useful for the missing `grep` and for `sed` if ever
+  (also useful for the grep conformance gaps and for `sed` if ever
   added).
 
 ### `false`
@@ -676,6 +676,80 @@ steps. Add tests for the edge cases `dirname //`, `dirname ""`,
   produces a different fold point.
 - Multibyte: `printf 'λλλ' | fold -w 3` (East-Asian wide chars)
   folds after one or two characters depending on width definition.
+
+### `grep`
+
+**Severity: Major.** Updated 2026-11-03. The command and its `egrep` and
+`fgrep` aliases are registered. The port targets just-bash behavior,
+which differs from POSIX in the cases below.
+
+**Sources and method:** Compared [grep.md](grep.md) with
+`command/internal/grep/{grep,options,regex,search,files}.go` and their tests.
+Ran the examples below through the Kefka shell with an isolated filesystem.
+The source specification is
+[POSIX 2018 grep](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/grep.html).
+Regex requirements also refer to
+[XBD Chapter 9](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap09.html).
+This is a focused comparison, not a conformance certification.
+
+**Required options:** `-E`, `-F`, `-c`, `-e`, `-f`, `-i`, `-l`, `-n`,
+`-q`, `-v`, and `-x` are implemented, with the limits below. `-s` is missing.
+The aliases, long options, `-P`, `-w`, `-L`, `-m`, `-h`, `-o`, recursion,
+context, and pathname filters are extensions outside this specification.
+
+**Working behavior:** Tests cover file input, implicit stdin, explicit `-`,
+empty patterns, selected-line counts, line numbers, inversion, and whole-line
+matching. They also cover newline-separated patterns, repeated `-e` and `-f`,
+filename prefixes, basic intervals, basic backreferences, and extended alternation.
+Normal match, no-match, and missing-file statuses are 0, 1, and 2.
+A `-q` match returns 0 even after an earlier file error, as required.
+These tests do not establish full BRE, ERE, or locale conformance.
+
+**Confirmed deviations:** In this table, input strings use `\n` for newline.
+`missing` names a file that does not exist.
+
+| Requirement | Reproduction | Current result | Required result |
+| --- | --- | --- | --- |
+| `OPTIONS -s` | `grep -s hit missing` | Unknown option diagnostic, status 1 | Suppress the file diagnostic; return an error status greater than 1 |
+| `OPTIONS -l`, `STDOUT` | `grep -l hit`, stdin `hit\n` | Prints `hit\n` | Prints `(standard input)\n` |
+| `OPTIONS -q`, `-s` | `grep -q hit missing` | Status 2, no diagnostic | Status greater than 1 and a file diagnostic; `-q` suppresses stdout, not file errors |
+| `EXIT STATUS` | `grep -Z hit` | Status 1 | Error status greater than 1 |
+| `OPTIONS -e`, `DESCRIPTION` | `grep -e '\(a\)\1' -e '\(b\)\1'`, stdin `aa\nbb\nb\n` | Selects all three lines | Selects only `aa` and `bb`; captures belong to each pattern |
+| BRE/ERE bracket expressions | `grep '[!a]'`, stdin `!\na\nb\n` | Selects `!` and `b` | Selects `!` and `a`; only leading `^` negates a regex bracket expression |
+| BRE/ERE collating symbols | `grep '[[.a.]]'`, stdin `a\nb\n` | No match | Selects `a` in the POSIX locale |
+| BRE/ERE equivalence classes | `grep '[[=a=]]'`, stdin `a\nb\n` | No match | Selects `a` in the POSIX locale |
+
+Implementation references: `options.go:parseOptions` omits `-s`.
+`grep.go:Impl.Exec` bypasses listing for implicit stdin, suppresses file
+errors with `-q`, and returns 1 for unknown options.
+`regex.go:compilePatterns` joins patterns without preserving their capture numbers.
+`regex.go:posixClasses` treats `!` as negation and does not translate collating
+symbols or equivalence classes. These deviations remain in the port.
+
+**Locale gap:** The matcher uses ECMAScript rules and fixed ASCII character
+classes. It does not read `LANG`, `LC_ALL`, `LC_COLLATE`, `LC_CTYPE`,
+`LC_MESSAGES`, or `NLSPATH`. Diagnostics remain English. Locale-sensitive
+matching and diagnostics therefore do not meet `ENVIRONMENT VARIABLES`.
+The matching engine also does not implement POSIX longest-match selection;
+full-line output can hide this difference in simple searches.
+
+**Resource limits:** The sandbox limits regex time and stack use, traversal,
+search work, match results, output, input lines, and retained context.
+Searches can return status 2 on valid text after a limit is reached.
+Current search limits are 100,000 results, 1,000,000 work steps, and 8 MiB
+of output per invocation. A line and retained context each have an 8 MiB
+limit. Context also has a 100,000-line limit. These are deliberate sandbox
+constraints, not POSIX guarantees.
+
+**Outside the POSIX comparison:** `-co` counts occurrences in just-bash,
+whereas plain `-c` counts selected lines. Repeated stdin operands stay
+consumed after `-m` stops the first search. Neither option combination is
+specified by this POSIX synopsis. Empty pattern files and directory operands
+also fall outside the required pattern-file and text-file inputs.
+
+**Follow-up checks:** Turn each deviation above into a regression test when
+changing its behavior. Add locale tests and a broader BRE/ERE conformance
+suite. Preserve the distinction between POSIX fixes and just-bash compatibility.
 
 ### `head`
 
@@ -1448,9 +1522,9 @@ In priority order:
    - `du` default block size must be 512, not 1024
      (`du.go:194`). Or expose `BLOCKSIZE` env var.
 
-4. **Implement `chmod` and `grep`** — the two missing utilities
-   that scripts rely on most. `grep` needs a BRE↔Go-regex
-   translator that `expr` could share.
+4. **Implement `chmod` and close the grep conformance gaps.**
+   Grep is registered. Its required `-s` option, diagnostics, stdin
+   listing, and POSIX regex behavior still need work.
 
 5. **Wire up accepted-but-ignored flags or remove them.**
    `touch -a`/`-m`/`-r`/`-t`, `cp -p`, `diff -b` all silently
