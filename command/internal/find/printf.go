@@ -36,7 +36,8 @@ type printfData struct {
 //	%% literal %
 //
 // Every directive takes an optional width and precision, as in %-20.10f.
-func formatPrintf(format string, d printfData) (string, error) {
+// The format must have passed checkPrintf.
+func formatPrintf(format string, d printfData) string {
 	s := processEscapes(format)
 	var out strings.Builder
 
@@ -55,10 +56,8 @@ func formatPrintf(format string, d printfData) (string, error) {
 			continue
 		}
 
-		width, precision, consumed, err := parseWidthPrecision(s[i:])
-		if err != nil {
-			return "", err
-		}
+		// checkPrintf already rejected widths over the limit.
+		width, precision, consumed, _ := parseWidthPrecision(s[i:])
 		i += consumed
 		if i >= len(s) {
 			out.WriteByte('%')
@@ -116,14 +115,45 @@ func formatPrintf(format string, d printfData) (string, error) {
 			continue
 		}
 
-		padded, err := applyWidth(value, width, precision)
-		if err != nil {
-			return "", err
-		}
-		out.WriteString(padded)
+		out.WriteString(applyWidth(value, width, precision))
 	}
 
-	return out.String(), nil
+	return out.String()
+}
+
+// checkPrintf rejects a -printf format whose width or precision is over
+// maxFormatBytes. It walks the format the same way formatPrintf does but
+// renders nothing, so find can refuse the format before it touches any
+// file.
+func checkPrintf(format string) error {
+	s := processEscapes(format)
+	i := 0
+	for i < len(s) {
+		if s[i] != '%' || i+1 >= len(s) {
+			i++
+			continue
+		}
+		i++
+		if s[i] == '%' {
+			i++
+			continue
+		}
+		_, _, consumed, err := parseWidthPrecision(s[i:])
+		if err != nil {
+			return err
+		}
+		i += consumed
+		if i >= len(s) {
+			break
+		}
+		directive, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		if directive == 'T' && i < len(s) {
+			_, n := utf8.DecodeRuneInString(s[i:])
+			i += n
+		}
+	}
+	return nil
 }
 
 // parseWidthPrecision reads an optional "-", width, and ".precision".
@@ -167,7 +197,7 @@ func parseWidthPrecision(s string) (width, precision, consumed int, err error) {
 // applyWidth truncates value to precision runes, then pads it with spaces
 // to |width| runes: on the left for positive width, on the right for
 // negative width.
-func applyWidth(value string, width, precision int) (string, error) {
+func applyWidth(value string, width, precision int) string {
 	if precision >= 0 && utf8.RuneCountInString(value) > precision {
 		runes := []rune(value)
 		value = string(runes[:precision])
@@ -178,16 +208,13 @@ func applyWidth(value string, width, precision int) (string, error) {
 	}
 	n := utf8.RuneCountInString(value)
 	if abs <= n {
-		return value, nil
-	}
-	if len(value)+abs-n > maxFormatBytes {
-		return "", errFormatLimit
+		return value
 	}
 	pad := strings.Repeat(" ", abs-n)
 	if width < 0 {
-		return value + pad, nil
+		return value + pad
 	}
-	return pad + value, nil
+	return pad + value
 }
 
 func formatMode(mode fs.FileMode, isDir bool) string {

@@ -260,7 +260,11 @@ func parseExpression(args []string) (*options, string) {
 			if !hasOperand {
 				return nil, missingArgument(arg)
 			}
-			push(&expr{kind: exprAction, act: &action{kind: actPrintf, format: operand()}})
+			format := operand()
+			if err := checkPrintf(format); err != nil {
+				return nil, "find: " + err.Error() + "\n"
+			}
+			push(&expr{kind: exprAction, act: &action{kind: actPrintf, format: format}})
 		case "-delete":
 			push(&expr{kind: exprAction, act: &action{kind: actDelete}})
 		default:
@@ -284,8 +288,13 @@ func parseExpression(args []string) (*options, string) {
 }
 
 // compileRegex compiles a -regex pattern. Like GNU find, the pattern must
-// match the whole path, not a substring of it.
+// match the whole path, not a substring of it. The pattern is checked on
+// its own first: wrapping it in a group can turn a malformed pattern such
+// as ".*)|(?:.*" into a valid one that matches every path.
 func compileRegex(pattern string, ignoreCase bool) (*regexp.Regexp, error) {
+	if _, err := regexp.Compile(pattern); err != nil {
+		return nil, err
+	}
 	flags := ""
 	if ignoreCase {
 		flags = "(?i)"

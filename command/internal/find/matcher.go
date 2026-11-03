@@ -5,6 +5,8 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // evalCtx is what an expression can see about one entry. isEmpty is a
@@ -170,8 +172,9 @@ func (e *expr) newerRefs() []string {
 
 // matchGlob matches name against a shell pattern the way fnmatch(3) does
 // without FNM_PATHNAME or FNM_PERIOD: '*' and '?' also match '/' and a
-// leading '.'. Supports '*', '?', '[...]' (with '!' or '^' negation and
-// ranges), and backslash escapes. An unterminated '[' is a literal.
+// leading '.'. Supports '*', '?', '[...]' (with '!' or '^' negation,
+// ranges, and named classes such as [:digit:]), and backslash escapes. An
+// unterminated '[' is a literal.
 func matchGlob(pattern, name string, ignoreCase bool) bool {
 	if ignoreCase {
 		pattern = strings.ToLower(pattern)
@@ -189,7 +192,7 @@ func matchGlob(pattern, name string, ignoreCase bool) bool {
 			continue
 		}
 		if pi < len(p) {
-			if width, ok := matchOne(p[pi:], s[si]); ok {
+			if width, ok := matchOne(p[pi:], s[si], ignoreCase); ok {
 				pi += width
 				si++
 				continue
@@ -210,7 +213,7 @@ func matchGlob(pattern, name string, ignoreCase bool) bool {
 
 // matchOne matches a single non-'*' pattern element at the start of p
 // against c, returning how many pattern runes it used.
-func matchOne(p []rune, c rune) (int, bool) {
+func matchOne(p []rune, c rune, fold bool) (int, bool) {
 	switch p[0] {
 	case '?':
 		return 1, true
@@ -220,7 +223,7 @@ func matchOne(p []rune, c rune) (int, bool) {
 		}
 		return 1, c == '\\'
 	case '[':
-		if width, matched, ok := matchBracket(p, c); ok {
+		if width, matched, ok := matchBracket(p, c, fold); ok {
 			return width, matched
 		}
 		return 1, c == '['
@@ -230,7 +233,7 @@ func matchOne(p []rune, c rune) (int, bool) {
 
 // matchBracket matches a bracket expression at the start of p. ok is false
 // when the bracket is not closed.
-func matchBracket(p []rune, c rune) (width int, matched, ok bool) {
+func matchBracket(p []rune, c rune, fold bool) (width int, matched, ok bool) {
 	i := 1
 	negate := false
 	if i < len(p) && (p[i] == '!' || p[i] == '^') {
@@ -246,6 +249,16 @@ func matchBracket(p []rune, c rune) (width int, matched, ok bool) {
 			break
 		}
 		first = false
+
+		if p[i] == '[' && i+1 < len(p) && p[i+1] == ':' {
+			if end := classEnd(p, i+2); end >= 0 {
+				if inClass(string(p[i+2:end]), c, fold) {
+					matched = true
+				}
+				i = end + 2
+				continue
+			}
+		}
 
 		lo := p[i]
 		if lo == '\\' && i+1 < len(p) {
@@ -268,4 +281,55 @@ func matchBracket(p []rune, c rune) (width int, matched, ok bool) {
 		}
 	}
 	return i + 1, matched != negate, true
+}
+
+// classEnd returns the index of the ":" that closes a "[:name:]" whose
+// name starts at start, or -1.
+func classEnd(p []rune, start int) int {
+	for j := start; j+1 < len(p); j++ {
+		if p[j] == ':' && p[j+1] == ']' {
+			return j
+		}
+		if !unicode.IsLower(p[j]) {
+			return -1
+		}
+	}
+	return -1
+}
+
+// inClass reports whether c is in the named POSIX character class. An
+// unknown name matches nothing, as with fnmatch(3). With fold set (for
+// -iname and -ipath, where the name is already lowercase), [:upper:] and
+// [:lower:] match letters of either case.
+func inClass(name string, c rune, fold bool) bool {
+	if fold && (name == "upper" || name == "lower") {
+		return unicode.IsUpper(c) || unicode.IsLower(c)
+	}
+	switch name {
+	case "alnum":
+		return unicode.IsLetter(c) || unicode.IsDigit(c)
+	case "alpha":
+		return unicode.IsLetter(c)
+	case "blank":
+		return c == ' ' || c == '\t'
+	case "cntrl":
+		return unicode.IsControl(c)
+	case "digit":
+		return c >= '0' && c <= '9'
+	case "graph":
+		return unicode.IsPrint(c) && c != ' '
+	case "lower":
+		return unicode.IsLower(c)
+	case "print":
+		return unicode.IsPrint(c)
+	case "punct":
+		return unicode.IsPunct(c) || unicode.IsSymbol(c)
+	case "space":
+		return unicode.IsSpace(c)
+	case "upper":
+		return unicode.IsUpper(c)
+	case "xdigit":
+		return c < utf8.RuneSelf && isHex(byte(c))
+	}
+	return false
 }

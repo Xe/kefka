@@ -214,12 +214,11 @@ func (w *walker) walkStart(start string) error {
 	w.start = start
 	fsPath := resolvePath(w.ec, start)
 
-	if _, err := w.ec.FS.Stat(fsPath); err != nil {
-		w.effects = append(w.effects, effect{message: fmt.Sprintf("find: %s: No such file or directory\n", start)})
-		return nil
-	}
+	// Lstat, not Stat: a starting point that is a dangling symlink still
+	// exists and is reported like any other symlink.
 	info, err := w.ec.FS.Lstat(fsPath)
 	if err != nil {
+		w.effects = append(w.effects, effect{message: fmt.Sprintf("find: %s: No such file or directory\n", start)})
 		return nil
 	}
 
@@ -430,12 +429,7 @@ func (w *walker) apply(stdout, stderr io.Writer) error {
 			out.WriteString(e.data.path)
 			out.WriteByte(0)
 		case actPrintf:
-			s, err := formatPrintf(e.act.format, e.data)
-			if err != nil {
-				warn("find: " + err.Error() + "\n")
-				return interp.ExitStatus(1)
-			}
-			out.WriteString(s)
+			out.WriteString(formatPrintf(e.act.format, e.data))
 		case actDelete:
 			if err := deleteEntry(w.ec, e.fsPath); err != nil {
 				warn(fmt.Sprintf("find: cannot delete '%s': %s\n", e.data.path, errorReason(err)))

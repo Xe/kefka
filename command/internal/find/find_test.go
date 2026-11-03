@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/Xe/kefka/command/registry"
 	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/memfs"
+	"github.com/go-git/go-billy/v6/osfs"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -622,6 +624,12 @@ func TestFind_Patterns(t *testing.T) {
 			files:      map[string]entry{"/dir/a1": file(""), "/dir/b1": file(""), "/dir/c1": file("")},
 			args:       []string{"/dir", "-name", "[!a]1"},
 			wantStdout: "/dir/b1\n/dir/c1\n",
+		},
+		{
+			name:       "named character class",
+			files:      map[string]entry{"/dir/7": file(""), "/dir/a": file(""), "/dir/42": file("")},
+			args:       []string{"/dir", "-name", "[[:digit:]]"},
+			wantStdout: "/dir/7\n",
 		},
 		{
 			name:       "regex",
@@ -1370,6 +1378,9 @@ func TestFind_FailClosed(t *testing.T) {
 		{[]string{"/dir", "-exec", "echo", "+"}, "find: invalid argument `+' to `-exec'\n"},
 		{[]string{"/dir", "!", "-delete"}, "find: refusing to evaluate `-delete' under negation\n"},
 		{[]string{"/dir", "-name", "remove", "-o", "-regex", "(", "-delete"}, "find: invalid argument `(' to `-regex'\n"},
+		{[]string{"/dir", "-regex", ".*)|(?:.*", "-delete"}, "find: invalid argument `.*)|(?:.*' to `-regex'\n"},
+		{[]string{"/dir", "-type", "f", "-delete", "-printf", "%99999999999f"}, "find: format width limit exceeded (10485760 bytes)\n"},
+		{[]string{"/dir", "-name", "nomatch", "-printf", "%.99999999999f"}, "find: format width limit exceeded (10485760 bytes)\n"},
 	} {
 		tests = append(tests, findTest{
 			name:       "rejects " + strings.Join(tt.args, " "),
@@ -1544,6 +1555,20 @@ func TestFind_Symlinks(t *testing.T) {
 	}
 }
 
+func TestFind_DanglingSymlinkStart(t *testing.T) {
+	// memfs Stat does not follow links, so this needs a real directory to
+	// show that a dangling starting point is not mistaken for a missing one.
+	root := t.TempDir()
+	if err := os.Symlink("nowhere", filepath.Join(root, "dangling")); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+
+	got := run(t, osfs.New(root), "", "/dangling")
+	if want := "/dangling\n"; got.stdout != want || got.stderr != "" || got.code != 0 {
+		t.Errorf("stdout = %q, stderr = %q, code = %d; want %q, no stderr, code 0", got.stdout, got.stderr, got.code, want)
+	}
+}
+
 func TestMatchGlob(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
@@ -1573,6 +1598,16 @@ func TestMatchGlob(t *testing.T) {
 		{name: "escaped star", pattern: `a\*`, input: "a*", want: true},
 		{name: "escaped star is not a wildcard", pattern: `a\*`, input: "ab"},
 		{name: "regex metacharacters are literal", pattern: "a.(b)+", input: "a.(b)+", want: true},
+		{name: "digit class", pattern: "[[:digit:]]", input: "7", want: true},
+		{name: "digit class miss", pattern: "[[:digit:]]", input: "a"},
+		{name: "negated class", pattern: "[![:digit:]]x", input: "ax", want: true},
+		{name: "class mixed with literal", pattern: "[[:alpha:]_]*", input: "_init", want: true},
+		{name: "class mixed with range", pattern: "[[:space:]0-9]", input: "5", want: true},
+		{name: "punct includes symbols", pattern: "[[:punct:]]", input: "$", want: true},
+		{name: "unknown class matches nothing", pattern: "[[:bogus:]]", input: "b"},
+		{name: "upper class", pattern: "[[:upper:]]*", input: "README", want: true},
+		{name: "upper class is case sensitive", pattern: "[[:upper:]]*", input: "readme"},
+		{name: "upper class folds", pattern: "[[:upper:]]*", input: "README", ignoreCase: true, want: true},
 		{name: "case sensitive", pattern: "README*", input: "readme.md"},
 		{name: "case insensitive", pattern: "README*", input: "readme.md", ignoreCase: true, want: true},
 	} {
