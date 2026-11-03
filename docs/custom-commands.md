@@ -203,7 +203,7 @@ func (Impl) Exec(_ context.Context, ec *command.ExecContext, args []string) erro
 		err = reverseLines(r, stdout, sep)
 		closeFn()
 		if err != nil {
-			fmt.Fprintf(stderr, "rev: %s: read error\n", name)
+			fmt.Fprintf(stderr, "rev: %s: input/output error\n", name)
 			exit = interp.ExitStatus(1)
 		}
 	}
@@ -229,9 +229,13 @@ func reverseLines(r io.Reader, w io.Writer, sep byte) error {
 		}
 		out := []rune(string(line))
 		slices.Reverse(out)
-		io.WriteString(w, string(out))
+		if _, err := io.WriteString(w, string(out)); err != nil {
+			return err
+		}
 		if hasSep {
-			w.Write([]byte{sep})
+			if _, err := w.Write([]byte{sep}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -262,16 +266,14 @@ func resolvePath(ec *command.ExecContext, p string) string {
 	}
 	if path.IsAbs(p) {
 		p = strings.TrimPrefix(p, "/")
-		if p == "" {
-			return "."
-		}
-		return path.Clean(p)
+	} else {
+		p = path.Join(dir, p)
 	}
-	joined := path.Join(dir, p)
-	if joined == "" {
+	p = path.Clean(p)
+	if p == "." || p == ".." || strings.HasPrefix(p, "../") {
 		return "."
 	}
-	return joined
+	return p
 }
 ```
 
@@ -281,6 +283,8 @@ The parts of this file that every command repeats are:
 - **The getopt block.** See the next section.
 - **The `-` argument.** `-` means stdin. No file arguments also means stdin.
 - **The `resolvePath` helper.** Copy it without changes. It maps shell paths to `FS` paths.
+- **Root containment.** The helper clamps paths outside the filesystem root to `.`. It uses the same rule as the registry.
+- **Write errors.** Check errors from both the line write and the separator write. Return a failure if either write fails.
 - **The error loop.** Report each bad file, continue with the rest, and return the failure at the end.
 
 ### 3. Parse flags with getopt
@@ -348,6 +352,8 @@ package rev
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -355,6 +361,7 @@ import (
 	"github.com/Xe/kefka/command"
 	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/memfs"
+	"mvdan.cc/sh/v3/interp"
 )
 
 func newFS(t *testing.T) billy.Filesystem {
@@ -493,6 +500,59 @@ func TestHelp(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "Usage: rev [OPTION]... [FILE]...") {
 		t.Errorf("usage line missing from stderr: %q", stderr)
+	}
+}
+
+func TestResolvePath(t *testing.T) {
+	tests := []struct{ name, dir, input, want string }{
+		{"root", ".", "/", "."},
+		{"empty working directory", "", "file", "file"},
+		{"relative file", "work", "file", "work/file"},
+		{"absolute file", "work", "/file", "file"},
+		{"parent within root", "work/sub", "../file", "work/file"},
+		{"relative escape", ".", "../private", "."},
+		{"absolute escape", "work", "/../private", "."},
+		{"nested escape", "work", "../../private", "."},
+		{"bare parent", ".", "..", "."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolvePath(&command.ExecContext{Dir: tt.dir}, tt.input)
+			if got != tt.want {
+				t.Errorf("path = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+type failingWriter struct{ remaining int }
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	if len(p) > w.remaining {
+		return 0, io.ErrClosedPipe
+	}
+	w.remaining -= len(p)
+	return len(p), nil
+}
+func TestOutputErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		remaining int
+	}{
+		{"line write", 0}, {"separator write", 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			ec := &command.ExecContext{Stdin: strings.NewReader("abc\n"), Stdout: &failingWriter{tt.remaining}, Stderr: &stderr}
+			err := (Impl{}).Exec(context.Background(), ec, nil)
+			if !errors.Is(err, interp.ExitStatus(1)) {
+				t.Errorf("error = %v, want exit 1", err)
+			}
+			if !strings.Contains(stderr.String(), "input/output error") {
+				t.Errorf("stderr = %q", stderr.String())
+			}
+		})
 	}
 }
 ```
@@ -713,9 +773,9 @@ request and writes the response body to stdout.
 - **Read secrets from `ec.Environ`, not `os.Getenv`.** The shell environment is separate from the host environment. `cmd/kefka` builds it from a fixed list. `TOKEN=x fetch URL` puts `TOKEN` in `ec.Environ`.
 - **Put the client on `Impl`.** The embedder sets it in `main`. Tests point it at an `httptest.Server`. A `nil` client falls back to `http.DefaultClient`.
 - **Pick exit codes and document them.** There is no GNU tool to copy. Use `0` for success, `1` for a failed request, and `2` for a usage error. If a flag makes HTTP errors fatal, `22` matches `curl --fail`.
-- **Strip the Go wrapper from network errors.** `*url.Error` wraps the reason in `Get "URL": ...`. Unwrap it and print `fetch: URL: <reason>`.
+- **Strip Go error wrappers.** Unwrap `*url.Error` and `*os.PathError` before you print the cause. Filesystem wrappers can contain host paths.
 - **Check output close errors.** S3FS uploads on close. Return a failure if the close fails.
-- **Write files through `ec.FS`.** An `--output` flag opens the file with `ec.FS.OpenFile` and `resolvePath`, not `os.Create`.
+- **Write files through `ec.FS`.** Use `ec.FS.Create` with `resolvePath` for an `--output` flag. S3FS rejects the `O_CREATE` and `O_TRUNC` flags for `OpenFile`.
 
 Network commands must be pure Go. WASI preview 1 has no sockets, so a WASM
 guest cannot open a connection.
@@ -871,14 +931,16 @@ func (i Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) 
 	return nil
 }
 
-// reason returns the human-readable cause of a request error without the
-// Go wrapper text that *url.Error adds.
+// reason returns the cause without URL or filesystem path wrappers.
 func reason(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timed out"
 	}
 	if uerr, ok := errors.AsType[*url.Error](err); ok {
 		err = uerr.Err
+	}
+	if perr, ok := errors.AsType[*os.PathError](err); ok {
+		err = perr.Err
 	}
 	return err.Error()
 }
@@ -887,7 +949,7 @@ func openOutput(ec *command.ExecContext, name string) (io.WriteCloser, error) {
 	if ec.FS == nil {
 		return nil, errors.New("no filesystem")
 	}
-	return ec.FS.OpenFile(resolvePath(ec, name), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	return ec.FS.Create(resolvePath(ec, name))
 }
 
 func resolvePath(ec *command.ExecContext, p string) string {
@@ -897,16 +959,14 @@ func resolvePath(ec *command.ExecContext, p string) string {
 	}
 	if path.IsAbs(p) {
 		p = strings.TrimPrefix(p, "/")
-		if p == "" {
-			return "."
-		}
-		return path.Clean(p)
+	} else {
+		p = path.Join(dir, p)
 	}
-	joined := path.Join(dir, p)
-	if joined == "" {
+	p = path.Clean(p)
+	if p == "." || p == ".." || strings.HasPrefix(p, "../") {
 		return "."
 	}
-	return joined
+	return p
 }
 ```
 
@@ -1064,7 +1124,7 @@ func TestFetch(t *testing.T) {
 
 func TestOutputFile(t *testing.T) {
 	srv := newServer(t)
-	fs := memfs.New()
+	fs := createOnlyFS{memfs.New()}
 	got := run(t, srv, fs, nil, []string{"-o", "out.txt", srv.URL + "/ok"})
 	if got.err != nil {
 		t.Fatalf("unexpected error: %v; stderr=%q", got.err, got.stderr)
@@ -1085,8 +1145,8 @@ func TestOutputFile(t *testing.T) {
 
 type closeErrorFS struct{ billy.Filesystem }
 
-func (fs closeErrorFS) OpenFile(name string, flag int, perm os.FileMode) (billy.File, error) {
-	f, err := fs.Filesystem.OpenFile(name, flag, perm)
+func (fs closeErrorFS) Create(name string) (billy.File, error) {
+	f, err := fs.Filesystem.Create(name)
 	if err != nil {
 		return nil, err
 	}
@@ -1143,6 +1203,54 @@ func TestHelp(t *testing.T) {
 	}
 	if !strings.Contains(got.stderr, "Usage: fetch [OPTION]... URL") {
 		t.Errorf("usage line missing from stderr: %q", got.stderr)
+	}
+}
+
+func TestResolvePath(t *testing.T) {
+	tests := []struct{ name, dir, input, want string }{
+		{"root", ".", "/", "."},
+		{"empty working directory", "", "file", "file"},
+		{"relative file", "work", "file", "work/file"},
+		{"absolute file", "work", "/file", "file"},
+		{"parent within root", "work/sub", "../file", "work/file"},
+		{"relative escape", ".", "../private", "."},
+		{"absolute escape", "work", "/../private", "."},
+		{"nested escape", "work", "../../private", "."},
+		{"bare parent", ".", "..", "."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolvePath(&command.ExecContext{Dir: tt.dir}, tt.input)
+			if got != tt.want {
+				t.Errorf("path = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Model a backend that supports Create but rejects OpenFile flags.
+type createOnlyFS struct{ billy.Filesystem }
+
+func (fs createOnlyFS) OpenFile(string, int, os.FileMode) (billy.File, error) {
+	return nil, errors.New("unsupported open flag")
+}
+
+type pathErrorWriter struct{}
+
+func (pathErrorWriter) Write([]byte) (int, error) {
+	return 0, &os.PathError{Op: "write", Path: "/host/private/output", Err: errors.New("disk full")}
+}
+func TestOutputPathError(t *testing.T) {
+	srv := newServer(t)
+	var stderr bytes.Buffer
+	target := srv.URL + "/ok"
+	ec := &command.ExecContext{Stdout: pathErrorWriter{}, Stderr: &stderr}
+	err := (Impl{Client: srv.Client()}).Exec(context.Background(), ec, []string{target})
+	if !errors.Is(err, interp.ExitStatus(1)) {
+		t.Errorf("error = %v, want exit 1", err)
+	}
+	if want := "fetch: " + target + ": disk full\n"; stderr.String() != want {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
 	}
 }
 ```
