@@ -101,6 +101,21 @@ func compilePattern(source string, o options, wrap bool) (*matcher, error) {
 	if err != nil {
 		return nil, err
 	}
+	if reset != "" {
+		// ECMAScript numbers named captures in source order. Exclude our
+		// inserted captures when mapping the user's original backreferences.
+		numbers := []int{0}
+		for _, n := range re.GetGroupNumbers() {
+			if n != 0 && re.GroupNameFromNumber(n) != reset {
+				numbers = append(numbers, n)
+			}
+		}
+		source = remapBackreferences(source, numbers)
+		re, err = regexp2.Compile(source, flags, regexp2.OptionMaxBacktrackingStackSize(1<<20))
+		if err != nil {
+			return nil, err
+		}
+	}
 	re.MatchTimeout = matchTimeout
 	return &matcher{re: re, resetGroup: reset}, nil
 }
@@ -307,8 +322,10 @@ func perlRegexp(s string) (string, string, error) {
 				if err != nil || !utf8.ValidRune(rune(v)) {
 					return "", "", fmt.Errorf("invalid code point")
 				}
-				if inClass && v == '-' {
-					b.WriteString(`\-`)
+				if !inClass {
+					b.WriteString("(?:" + regexp2.Escape(string(rune(v))) + ")")
+				} else if v <= 0xffff {
+					fmt.Fprintf(&b, `\u%04x`, v)
 				} else {
 					b.WriteString(regexp2.Escape(string(rune(v))))
 				}
@@ -326,4 +343,62 @@ func perlRegexp(s string) (string, string, error) {
 		reset = ""
 	}
 	return b.String(), reset, nil
+}
+
+// remapBackreferences keeps numeric references attached to the user's groups.
+// Non-reference decimal escapes retain ECMAScript's octal/identity behavior.
+func remapBackreferences(s string, numbers []int) string {
+	var b strings.Builder
+	inClass := false
+	for i := 0; i < len(s); {
+		if s[i] == '[' {
+			inClass = true
+		} else if s[i] == ']' {
+			inClass = false
+		}
+		if s[i] != '\\' || i+1 == len(s) {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		if !inClass && strings.HasPrefix(s[i:], `\k<`) {
+			if end := strings.IndexByte(s[i+3:], '>'); end >= 0 {
+				n, err := strconv.Atoi(s[i+3 : i+3+end])
+				if err == nil && n > 0 && n < len(numbers) {
+					fmt.Fprintf(&b, `\k<%d>`, numbers[n])
+					i += end + 4
+					continue
+				}
+			}
+		}
+		if inClass || s[i+1] < '1' || s[i+1] > '9' {
+			b.WriteString(s[i : i+2])
+			i += 2
+			continue
+		}
+		end := i + 1
+		for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+			end++
+		}
+		n, err := strconv.Atoi(s[i+1 : end])
+		if err == nil && n > 0 && n < len(numbers) {
+			fmt.Fprintf(&b, `\k<%d>`, numbers[n])
+			i = end
+			continue
+		}
+		// With no original capture, \1 through \7 start an octal escape.
+		n, end = 0, i+1
+		for end < len(s) && end < i+4 && s[end] >= '0' && s[end] <= '7' && n*8+int(s[end]-'0') <= 255 {
+			n = n*8 + int(s[end]-'0')
+			end++
+		}
+		if end > i+1 {
+			fmt.Fprintf(&b, `\x%02x`, n)
+			i = end
+		} else {
+			b.WriteByte(s[i+1])
+			i += 2
+		}
+	}
+	return b.String()
 }

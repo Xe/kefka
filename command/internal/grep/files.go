@@ -1,6 +1,7 @@
 package grep
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -29,41 +30,52 @@ func resolvePath(ec *command.ExecContext, p string) string {
 	return p
 }
 
-func readInput(ctx context.Context, ec *command.ExecContext, name string) (string, error) {
+// openInput reuses stdin's reader for pattern files and search operands.
+// Only filesystem inputs are closed.
+func openInput(ctx context.Context, ec *command.ExecContext, name string) (*bufio.Reader, func() error, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return nil, nil, err
 	}
-	var r io.Reader
 	if name == "-" {
 		if ec.Stdin == nil {
-			return "", nil
+			return bufio.NewReader(strings.NewReader("")), func() error { return nil }, nil
 		}
-		r = ec.Stdin
-	} else {
-		if name == "" || ec.FS == nil {
-			return "", errMissing
+		if r, ok := ec.Stdin.(*bufio.Reader); ok {
+			return r, func() error { return nil }, nil
 		}
-		full := resolvePath(ec, name)
-		info, err := ec.FS.Stat(full)
-		if err != nil {
-			return "", errMissing
-		}
-		if info.IsDir() {
-			return "", errDirectory
-		}
-		f, err := ec.FS.Open(full)
-		if err != nil {
-			return "", errMissing
-		}
-		defer f.Close()
-		r = f
+		return bufio.NewReader(contextReader{ctx, ec.Stdin}), func() error { return nil }, nil
 	}
-	content, err := io.ReadAll(contextReader{ctx, r})
+	if name == "" || ec.FS == nil {
+		return nil, nil, errMissing
+	}
+	full := resolvePath(ec, name)
+	info, err := ec.FS.Stat(full)
+	if err != nil {
+		return nil, nil, errMissing
+	}
+	if info.IsDir() {
+		return nil, nil, errDirectory
+	}
+	f, err := ec.FS.Open(full)
+	if err != nil {
+		return nil, nil, errMissing
+	}
+	return bufio.NewReader(contextReader{ctx, f}), f.Close, nil
+}
+
+// Pattern files must be read completely before compiling the search expression.
+func readInput(ctx context.Context, ec *command.ExecContext, name string) (string, error) {
+	r, closeInput, err := openInput(ctx, ec, name)
+	if err != nil {
+		return "", err
+	}
+	defer closeInput()
+	content, err := io.ReadAll(r)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "", errors.New("Input/output error")
+		return "", errInput
 	}
 	return decodeUTF8(content), nil
 }
@@ -213,6 +225,9 @@ func walkFiles(ctx context.Context, ec *command.ExecContext, name string, o opti
 
 func childPath(dir, name string) string {
 	if dir == "." || dir == "" {
+		if name == "-" {
+			return "./-"
+		}
 		return name
 	}
 	if dir == "/" {

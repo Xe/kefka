@@ -2,6 +2,7 @@
 package grep
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -31,6 +32,13 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Keep buffered stdin local to this invocation.
+	local := *ec
+	ec = &local
+	if ec.Stdin != nil {
+		ec.Stdin = bufio.NewReader(contextReader{ctx, ec.Stdin})
+	}
+	budget := new(searchBudget)
 	stdout, stderr := ec.Stdout, ec.Stderr
 	if stdout == nil {
 		stdout = io.Discard
@@ -89,7 +97,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 			fmt.Fprintln(stderr, "grep: no input files")
 			return interp.ExitStatus(2)
 		}
-		content, err := readInput(ctx, ec, "-")
+		input, closeInput, err := openInput(ctx, ec, "-")
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -101,7 +109,8 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		searchOpts := o
 		searchOpts.list = false
 		searchOpts.listWithout = false
-		output, matched, err := search(ctx, content, matcher, searchOpts, "")
+		output, matched, err := search(ctx, input, matcher, searchOpts, "", budget)
+		closeInput()
 		if err != nil {
 			return searchError(ctx, stderr, err)
 		}
@@ -131,6 +140,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	}
 	showFilename := !o.noFilename && (len(entries) > 1 || o.recursive && hasFile)
 	anyMatch, anyError := false, false
+	stdinClaimed := false
 	var diagnostics strings.Builder
 	for _, name := range entries {
 		if err := ctx.Err(); err != nil {
@@ -143,7 +153,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 		if name == "-" {
 			display = "(standard input)"
 		}
-		content, err := readInput(ctx, ec, name)
+		input, closeInput, err := openInput(ctx, ec, name)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -155,12 +165,29 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 			}
 			continue
 		}
+		if name == "-" {
+			// Upstream consumes stdin only once, even when -m stops early.
+			// Claim it without draining a pipe that may still be open.
+			if stdinClaimed {
+				input = bufio.NewReader(strings.NewReader(""))
+			}
+			stdinClaimed = true
+		}
 		prefix := ""
 		if showFilename {
 			prefix = display
 		}
-		output, matched, err := search(ctx, content, matcher, o, prefix)
+		output, matched, err := search(ctx, input, matcher, o, prefix, budget)
+		closeInput()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errors.Is(err, errInput) {
+				fmt.Fprintf(&diagnostics, "grep: %s: %s\n", display, err)
+				anyError = true
+				continue
+			}
 			return searchError(ctx, stderr, err)
 		}
 		if matched {
@@ -178,6 +205,12 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 				output = display + "\n"
 			} else if !o.count || o.list {
 				output = ""
+			}
+		}
+		if !o.quiet && (o.list || o.listWithout) {
+			var listing strings.Builder
+			if err := budget.write(&listing, output); err != nil {
+				return searchError(ctx, stderr, err)
 			}
 		}
 		if !o.quiet {
@@ -203,6 +236,11 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 func searchError(ctx context.Context, stderr io.Writer, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	switch {
+	case errors.Is(err, errWorkLimit), errors.Is(err, errResultLimit), errors.Is(err, errOutputLimit), errors.Is(err, errLineLimit), errors.Is(err, errContextLimit), errors.Is(err, errInput):
+		fmt.Fprintf(stderr, "grep: %s\n", err)
+		return interp.ExitStatus(2)
 	}
 	// Engine errors may include the input. Keep guest data out of diagnostics.
 	fmt.Fprintln(stderr, "grep: regular expression execution limit exceeded")
