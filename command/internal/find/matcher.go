@@ -15,6 +15,7 @@ import (
 type evalCtx struct {
 	name    string
 	path    string
+	typ     fs.FileMode // type bits only
 	isFile  bool
 	isDir   bool
 	isEmpty func() bool
@@ -42,40 +43,31 @@ func (e *expr) eval(c *evalCtx) evalResult {
 	case exprRegex:
 		return evalResult{matches: e.re.MatchString(c.path)}
 	case exprType:
-		if e.fileType == 'f' {
-			return evalResult{matches: c.isFile}
-		}
-		return evalResult{matches: c.isDir}
+		return evalResult{matches: fileTypeLetter(c.typ) == e.fileType}
 	case exprEmpty:
 		return evalResult{matches: c.isEmpty()}
 	case exprMtime:
-		ageDays := float64(c.now.Sub(c.mtime)) / float64(24*time.Hour)
-		days := float64(e.value)
-		switch e.cmp {
-		case cmpMore:
-			return evalResult{matches: ageDays > days}
-		case cmpLess:
-			return evalResult{matches: ageDays < days}
-		}
-		return evalResult{matches: math.Floor(ageDays) == days}
+		// POSIX: whole 24-hour periods since find started, remainder
+		// discarded, compared with n for +n, n, and -n alike.
+		days := int64(math.Floor(float64(c.now.Sub(c.mtime)) / float64(24*time.Hour)))
+		return evalResult{matches: compare(days, e.cmp, e.value)}
 	case exprNewer:
 		ref, ok := c.newer[e.refPath]
 		return evalResult{matches: ok && c.mtime.After(ref)}
 	case exprSize:
-		target := e.value * sizeMultiplier(e.unit)
-		switch {
-		case e.cmp == cmpMore:
-			return evalResult{matches: c.size > target}
-		case e.cmp == cmpLess:
-			return evalResult{matches: c.size < target}
-		case e.unit == 'b':
-			blocks := (c.size + 511) / 512
-			return evalResult{matches: blocks == e.value}
+		// POSIX: without a suffix (or with b), the size is counted in
+		// 512-byte blocks, rounded up. With c, in bytes. The k, M, and G
+		// extensions compare bytes, as just-bash does.
+		switch e.unit {
+		case 'b':
+			return evalResult{matches: compare((c.size+511)/512, e.cmp, e.value)}
+		case 'c':
+			return evalResult{matches: compare(c.size, e.cmp, e.value)}
 		}
-		return evalResult{matches: c.size == target}
+		return evalResult{matches: compare(c.size, e.cmp, e.value*sizeMultiplier(e.unit))}
 	case exprPerm:
-		fileMode := int64(c.mode.Perm())
-		want := e.value & 0o777
+		fileMode := unixMode(c.mode)
+		want := e.value & 0o7777
 		switch e.perm {
 		case permAll:
 			return evalResult{matches: fileMode&want == want}
@@ -85,6 +77,8 @@ func (e *expr) eval(c *evalCtx) evalResult {
 		return evalResult{matches: fileMode == want}
 	case exprPrune:
 		return evalResult{matches: true, pruned: true}
+	case exprTrue:
+		return evalResult{matches: true}
 	case exprAction:
 		return evalResult{matches: true, actions: []*action{e.act}}
 	case exprNot:
@@ -114,6 +108,53 @@ func (e *expr) eval(c *evalCtx) evalResult {
 		}
 	}
 	return evalResult{}
+}
+
+func compare(got int64, cmp comparison, n int64) bool {
+	switch cmp {
+	case cmpMore:
+		return got > n
+	case cmpLess:
+		return got < n
+	}
+	return got == n
+}
+
+// fileTypeLetter maps type bits to the -type letter POSIX uses for them.
+func fileTypeLetter(typ fs.FileMode) byte {
+	switch {
+	case typ.IsRegular():
+		return 'f'
+	case typ&fs.ModeDir != 0:
+		return 'd'
+	case typ&fs.ModeSymlink != 0:
+		return 'l'
+	case typ&fs.ModeNamedPipe != 0:
+		return 'p'
+	case typ&fs.ModeSocket != 0:
+		return 's'
+	case typ&fs.ModeCharDevice != 0:
+		return 'c'
+	case typ&fs.ModeDevice != 0:
+		return 'b'
+	}
+	return 0
+}
+
+// unixMode returns the permission bits of m as a Unix mode, including
+// setuid (04000), setgid (02000), and sticky (01000).
+func unixMode(m fs.FileMode) int64 {
+	mode := int64(m.Perm())
+	if m&fs.ModeSetuid != 0 {
+		mode |= 0o4000
+	}
+	if m&fs.ModeSetgid != 0 {
+		mode |= 0o2000
+	}
+	if m&fs.ModeSticky != 0 {
+		mode |= 0o1000
+	}
+	return mode
 }
 
 func concatActions(a, b []*action) []*action {

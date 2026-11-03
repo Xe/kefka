@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // maxSafeInteger mirrors JavaScript's Number.MAX_SAFE_INTEGER, which
@@ -23,6 +24,7 @@ const (
 	exprSize
 	exprPerm
 	exprPrune
+	exprTrue // -xdev, which only changes traversal
 	exprAction
 	exprNot
 	exprAnd
@@ -72,7 +74,7 @@ type expr struct {
 	ignoreCase bool           // -iname, -ipath, -iregex
 	re         *regexp.Regexp // -regex, compiled at parse time
 
-	fileType byte // -type: 'f' or 'd'
+	fileType byte // -type: one of b c d f l p s
 
 	cmp   comparison // -mtime, -size
 	value int64      // -mtime days, -size count, -perm mode
@@ -93,6 +95,7 @@ type options struct {
 	maxDepth   int // -1 when unset
 	minDepth   int
 	depthFirst bool
+	xdev       bool
 	help       bool
 }
 
@@ -171,7 +174,7 @@ func parseExpression(args []string) (*options, string) {
 				return nil, missingArgument(arg)
 			}
 			fileType := operand()
-			if fileType != "f" && fileType != "d" {
+			if len(fileType) != 1 || !strings.Contains("bcdflps", fileType) {
 				return nil, fmt.Sprintf("find: Unknown argument to -type: %s\n", fileType)
 			}
 			push(&expr{kind: exprType, fileType: fileType[0]})
@@ -215,6 +218,10 @@ func parseExpression(args []string) (*options, string) {
 			push(e)
 		case "-prune":
 			push(&expr{kind: exprPrune})
+		case "-xdev":
+			// Applies to the whole walk wherever it appears, like -depth.
+			opts.xdev = true
+			push(&expr{kind: exprTrue})
 		case "-not", "!":
 			tokens = append(tokens, token{kind: tokNot})
 		case "-o", "-or":
@@ -238,17 +245,25 @@ func parseExpression(args []string) (*options, string) {
 		case "-depth":
 			opts.depthFirst = true
 		case "-exec":
+			// ";" always ends the command. "+" ends it only right after a
+			// bare "{}"; anywhere else it is an ordinary argument.
 			var command []string
+			batch := false
 			i++
-			for i < len(args) && args[i] != ";" && args[i] != "+" {
+			for ; i < len(args); i++ {
+				if args[i] == ";" {
+					break
+				}
+				if args[i] == "+" && len(command) > 0 && command[len(command)-1] == "{}" {
+					batch = true
+					break
+				}
 				command = append(command, args[i])
-				i++
 			}
 			if i >= len(args) || len(command) == 0 {
 				return nil, missingArgument("-exec")
 			}
-			batch := args[i] == "+"
-			if batch && (command[len(command)-1] != "{}" || countBraces(command) != 1) {
+			if batch && countBraces(command) != 1 {
 				return nil, invalidArgument("-exec", "+")
 			}
 			push(&expr{kind: exprAction, act: &action{kind: actExec, command: command, batch: batch}})

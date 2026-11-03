@@ -30,13 +30,16 @@ import (
 type Impl struct{}
 
 var helpOptions = []string{
+	"-H               follow symbolic links given as starting points",
+	"-P               never follow symbolic links (default)",
 	"-name PATTERN    file name matches shell pattern PATTERN",
 	"-iname PATTERN   like -name but case insensitive",
 	"-path PATTERN    file path matches shell pattern PATTERN",
 	"-ipath PATTERN   like -path but case insensitive",
 	"-regex PATTERN   file path matches regular expression PATTERN",
 	"-iregex PATTERN  like -regex but case insensitive",
-	"-type TYPE       file is of type: f (regular file), d (directory)",
+	"-type TYPE       file is of type: f (regular file), d (directory), l (symbolic link),",
+	"                 p (FIFO), s (socket), b (block device), c (character device)",
 	"-empty           file is empty or directory is empty",
 	"-mtime N         file's data was modified N*24 hours ago",
 	"-newer FILE      file was modified more recently than FILE",
@@ -48,6 +51,7 @@ var helpOptions = []string{
 	"-mindepth LEVELS do not apply tests at levels less than LEVELS",
 	"-depth           process directory contents before directory itself",
 	"-prune           do not descend into this directory",
+	"-xdev            do not descend into directories on other devices",
 	"-not, !          negate the following expression",
 	"-a, -and         logical AND (default)",
 	"-o, -or          logical OR",
@@ -77,6 +81,30 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	stderr := ec.Stderr
 	if stderr == nil {
 		stderr = io.Discard
+	}
+
+	// Leading options pick the symlink policy; the last one wins. -P (never
+	// follow) is the default. -L would need loop detection, which billy
+	// cannot support without inode numbers, so it is refused rather than
+	// silently treated as -P.
+	followStart := false
+optionLoop:
+	for len(args) > 0 {
+		switch args[0] {
+		case "-H":
+			followStart = true
+		case "-P":
+			followStart = false
+		case "-L":
+			io.WriteString(stderr, "find: -L is not supported\n")
+			return interp.ExitStatus(1)
+		case "--":
+			args = args[1:]
+			break optionLoop
+		default:
+			break optionLoop
+		}
+		args = args[1:]
 	}
 
 	// Starting points come before the expression. Splitting them off first
@@ -119,13 +147,14 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 	}
 
 	w := &walker{
-		ctx:       ctx,
-		ec:        ec,
-		opts:      opts,
-		hasAction: len(acts) > 0,
-		needsStat: opts.expr.needsStat() || printfNeedsStat,
-		now:       time.Now(),
-		newer:     map[string]time.Time{},
+		ctx:         ctx,
+		ec:          ec,
+		opts:        opts,
+		hasAction:   len(acts) > 0,
+		needsStat:   opts.expr.needsStat() || printfNeedsStat || opts.xdev,
+		followStart: followStart,
+		now:         time.Now(),
+		newer:       map[string]time.Time{},
 	}
 
 	// A -newer reference that does not exist never matches.
@@ -151,7 +180,7 @@ func (Impl) Exec(ctx context.Context, ec *command.ExecContext, args []string) er
 
 func usage(w io.Writer) {
 	io.WriteString(w, "find - search for files in a directory hierarchy\n\n")
-	io.WriteString(w, "Usage: find [path...] [expression]\n")
+	io.WriteString(w, "Usage: find [-H|-P] [path...] [expression]\n")
 	io.WriteString(w, "\nOptions:\n")
 	for _, opt := range helpOptions {
 		io.WriteString(w, "  "+opt+"\n")
@@ -184,6 +213,7 @@ type node struct {
 	fsPath  string // path inside ec.FS
 	name    string
 	depth   int
+	typ     fs.FileMode // the type bits of the entry's mode
 	isFile  bool
 	isDir   bool
 	info    fs.FileInfo
@@ -194,23 +224,26 @@ type node struct {
 }
 
 type walker struct {
-	ctx       context.Context
-	ec        *command.ExecContext
-	opts      *options
-	hasAction bool
-	needsStat bool
-	now       time.Time
-	newer     map[string]time.Time
+	ctx         context.Context
+	ec          *command.ExecContext
+	opts        *options
+	hasAction   bool
+	needsStat   bool
+	followStart bool // -H
+	now         time.Time
+	newer       map[string]time.Time
 
-	start   string
-	effects []effect
-	fatal   error
+	start    string
+	startDev uint64 // device of the current starting point, for -xdev
+	hasDev   bool
+	effects  []effect
+	fatal    error
 }
 
+// walkStart walks one starting point. As POSIX requires, the path is
+// printed exactly as given, trailing slashes included, and entries below
+// it are joined with a single slash.
 func (w *walker) walkStart(start string) error {
-	for len(start) > 1 && strings.HasSuffix(start, "/") {
-		start = start[:len(start)-1]
-	}
 	w.start = start
 	fsPath := resolvePath(w.ec, start)
 
@@ -221,20 +254,48 @@ func (w *walker) walkStart(start string) error {
 		w.effects = append(w.effects, effect{message: fmt.Sprintf("find: %s: No such file or directory\n", start)})
 		return nil
 	}
+	// -H follows a starting point that is a symlink, unless it dangles.
+	if w.followStart && info.Mode()&fs.ModeSymlink != 0 {
+		if target, err := w.ec.FS.Stat(fsPath); err == nil {
+			info = target
+		}
+	}
+	w.startDev, w.hasDev = deviceOf(info)
 
-	name := start
-	if idx := strings.LastIndexByte(start, '/'); idx >= 0 && idx < len(start)-1 {
-		name = start[idx+1:]
+	// The basename ignores trailing slashes; "/" (or "//") stays "/".
+	name := strings.TrimRight(start, "/")
+	if name == "" {
+		name = "/"
+	} else if idx := strings.LastIndexByte(name, '/'); idx >= 0 {
+		name = name[idx+1:]
 	}
 
-	return w.visit(&node{
-		display: start,
+	return w.visit(newNode(start, fsPath, name, 0, info))
+}
+
+func newNode(display, fsPath, name string, depth int, info fs.FileInfo) *node {
+	typ := info.Mode().Type()
+	return &node{
+		display: display,
 		fsPath:  fsPath,
 		name:    name,
-		isFile:  info.Mode().IsRegular(),
-		isDir:   info.IsDir(),
+		depth:   depth,
+		typ:     typ,
+		isFile:  typ.IsRegular(),
+		isDir:   typ.IsDir(),
 		info:    info,
-	})
+	}
+}
+
+// otherDevice reports whether -xdev should stop the walk at n because n
+// is on a different device from the starting point. Filesystems that do
+// not expose device numbers (memfs, s3fs) are one device.
+func (w *walker) otherDevice(n *node) bool {
+	if !w.opts.xdev || !w.hasDev || n.info == nil {
+		return false
+	}
+	dev, ok := deviceOf(n.info)
+	return ok && dev != w.startDev
 }
 
 // readDir lists n once. A failure that belongs to the directory itself
@@ -269,7 +330,7 @@ func (w *walker) visit(n *node) error {
 
 	if w.opts.depthFirst {
 		// -prune has no effect under -depth.
-		if n.isDir && !atMax {
+		if n.isDir && !atMax && !w.otherDevice(n) {
 			w.readDir(n)
 			if err := w.visitChildren(n); err != nil {
 				return err
@@ -286,7 +347,7 @@ func (w *walker) visit(n *node) error {
 
 	evaluated, pruned := w.evaluate(n)
 	w.effects = append(w.effects, evaluated...)
-	descend := n.isDir && !pruned && !atMax
+	descend := n.isDir && !pruned && !atMax && !w.otherDevice(n)
 	if descend {
 		w.readDir(n)
 	}
@@ -308,24 +369,27 @@ func (w *walker) diagnose(n *node) {
 
 func (w *walker) visitChildren(n *node) error {
 	for _, entry := range n.entries {
-		child := &node{
-			display: joinDisplay(n.display, entry.Name()),
-			fsPath:  path.Join(n.fsPath, entry.Name()),
-			name:    entry.Name(),
-			depth:   n.depth + 1,
-		}
+		display := joinDisplay(n.display, entry.Name())
+		fsPath := path.Join(n.fsPath, entry.Name())
+		var child *node
 		if w.needsStat {
-			info, err := w.ec.FS.Lstat(child.fsPath)
+			info, err := w.ec.FS.Lstat(fsPath)
 			if err != nil {
 				// Gone between listing and stat; skip it.
 				continue
 			}
-			child.info = info
-			child.isFile = info.Mode().IsRegular()
-			child.isDir = info.IsDir()
+			child = newNode(display, fsPath, entry.Name(), n.depth+1, info)
 		} else {
-			child.isFile = entry.Type().IsRegular()
-			child.isDir = entry.Type().IsDir()
+			typ := entry.Type()
+			child = &node{
+				display: display,
+				fsPath:  fsPath,
+				name:    entry.Name(),
+				depth:   n.depth + 1,
+				typ:     typ,
+				isFile:  typ.IsRegular(),
+				isDir:   typ.IsDir(),
+			}
 		}
 		if err := w.visit(child); err != nil {
 			return err
@@ -363,6 +427,7 @@ func (w *walker) evaluate(n *node) ([]effect, bool) {
 		res := w.opts.expr.eval(&evalCtx{
 			name:   n.name,
 			path:   n.display,
+			typ:    n.typ,
 			isFile: n.isFile,
 			isDir:  n.isDir,
 			isEmpty: func() bool {

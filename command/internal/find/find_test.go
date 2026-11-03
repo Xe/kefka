@@ -409,10 +409,47 @@ func TestFind_Basic(t *testing.T) {
 			wantStdout: "/abc/file.txt\n",
 		},
 		{
-			name:       "trailing slash is normalized",
+			name:       "trailing slash adds no extra slash below it",
 			files:      map[string]entry{"/project/src/index.ts": file("")},
 			args:       []string{"/project/", "-name", "*.ts"},
 			wantStdout: "/project/src/index.ts\n",
+		},
+		{
+			name:       "starting point is printed as given",
+			files:      map[string]entry{"/dir/a": file("")},
+			args:       []string{"/dir/"},
+			wantStdout: "/dir/\n/dir/a\n",
+		},
+		{
+			// POSIX find, EXAMPLES 10.
+			name:       "trailing slashes are ignored for name",
+			files:      map[string]entry{"/foo": {dir: true}, "/bar": {dir: true}},
+			args:       []string{"foo///", "bar///", "-name", "foo", "-o", "-name", "bar?*"},
+			wantStdout: "foo///\n",
+		},
+		{
+			name:       "root name is slash",
+			files:      map[string]entry{"/a": file("")},
+			args:       []string{"/", "-maxdepth", "0", "-name", "/"},
+			wantStdout: "/\n",
+		},
+		{
+			name:       "double dash ends options",
+			files:      map[string]entry{"/dir/a": file("")},
+			args:       []string{"--", "/dir", "-maxdepth", "0"},
+			wantStdout: "/dir\n",
+		},
+		{
+			name:       "P option is the default",
+			files:      map[string]entry{"/dir/a": file("")},
+			args:       []string{"-P", "/dir"},
+			wantStdout: "/dir\n/dir/a\n",
+		},
+		{
+			name:       "xdev on a single filesystem changes nothing",
+			files:      map[string]entry{"/dir/sub/a": file("")},
+			args:       []string{"/dir", "-xdev"},
+			wantStdout: "/dir\n/dir/sub\n/dir/sub/a\n",
 		},
 		{
 			name:       "help",
@@ -442,6 +479,13 @@ func TestFind_Basic(t *testing.T) {
 			wantCode:   1,
 		},
 		{
+			name:       "type takes one letter",
+			files:      projectFiles(),
+			args:       []string{"/project", "-type", "fd"},
+			wantStderr: "find: Unknown argument to -type: fd\n",
+			wantCode:   1,
+		},
+		{
 			name:       "path after expression",
 			files:      projectFiles(),
 			args:       []string{"/project", "-type", "f", "src"},
@@ -459,7 +503,7 @@ func helpText() string {
 
 func TestFind_Help(t *testing.T) {
 	got := helpText()
-	for _, want := range []string{"find - search for files in a directory hierarchy\n", "Usage: find [path...] [expression]\n", "  -name PATTERN", "  -maxdepth LEVELS"} {
+	for _, want := range []string{"find - search for files in a directory hierarchy\n", "Usage: find [-H|-P] [path...] [expression]\n", "  -name PATTERN", "  -maxdepth LEVELS"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("help text missing %q", want)
 		}
@@ -850,6 +894,24 @@ func TestFind_Predicates(t *testing.T) {
 			wantStdout: "/dir/two-days.txt\n",
 		},
 		{
+			name:       "mtime more discards the remainder",
+			files:      map[string]entry{"/dir/f": {content: "x", mtime: now.Add(-7*day - 12*time.Hour)}},
+			args:       []string{"/dir", "-type", "f", "-mtime", "+7"},
+			wantStdout: "",
+		},
+		{
+			name:       "mtime exact discards the remainder",
+			files:      map[string]entry{"/dir/f": {content: "x", mtime: now.Add(-7*day - 12*time.Hour)}},
+			args:       []string{"/dir", "-type", "f", "-mtime", "7"},
+			wantStdout: "/dir/f\n",
+		},
+		{
+			name:       "mtime less discards the remainder",
+			files:      map[string]entry{"/dir/f": {content: "x", mtime: now.Add(-7*day - 12*time.Hour)}},
+			args:       []string{"/dir", "-type", "f", "-mtime", "-8"},
+			wantStdout: "/dir/f\n",
+		},
+		{
 			name: "newer",
 			files: map[string]entry{
 				"/ref.txt":       {content: "ref", mtime: now.Add(-time.Minute)},
@@ -896,6 +958,18 @@ func TestFind_Predicates(t *testing.T) {
 			wantStdout: "/dir/small.txt\n",
 		},
 		{
+			name:       "size less counts whole blocks",
+			files:      map[string]entry{"/dir/one.txt": file("x"), "/dir/empty.txt": file("")},
+			args:       []string{"/dir", "-type", "f", "-size", "-1"},
+			wantStdout: "/dir/empty.txt\n",
+		},
+		{
+			name:       "size more counts whole blocks",
+			files:      map[string]entry{"/dir/full.txt": file(strings.Repeat("x", 512)), "/dir/over.txt": file(strings.Repeat("x", 513))},
+			args:       []string{"/dir", "-type", "f", "-size", "+1"},
+			wantStdout: "/dir/over.txt\n",
+		},
+		{
 			name:       "size default 512 byte blocks rounds up",
 			files:      map[string]entry{"/dir/one.txt": file("x"), "/dir/two.txt": file(strings.Repeat("x", 513))},
 			args:       []string{"/dir", "-type", "f", "-size", "1"},
@@ -915,6 +989,34 @@ func TestFind_Perm(t *testing.T) {
 			},
 			args:       []string{"/test", "-type", "f", "-perm", "644"},
 			wantStdout: "/test/file1.txt\n/test/file3.txt\n",
+		},
+		{
+			name: "exact mode includes setuid",
+			files: map[string]entry{
+				"/test/plain":  {content: "a", mode: 0o755},
+				"/test/setuid": {content: "b", mode: fs.ModeSetuid | 0o755},
+			},
+			args:       []string{"/test", "-type", "f", "-perm", "4755"},
+			wantStdout: "/test/setuid\n",
+		},
+		{
+			name: "exact mode excludes setuid",
+			files: map[string]entry{
+				"/test/plain":  {content: "a", mode: 0o755},
+				"/test/setuid": {content: "b", mode: fs.ModeSetuid | 0o755},
+			},
+			args:       []string{"/test", "-type", "f", "-perm", "755"},
+			wantStdout: "/test/plain\n",
+		},
+		{
+			name: "all bits with setgid and sticky",
+			files: map[string]entry{
+				"/test/plain":  {content: "a", mode: 0o755},
+				"/test/setgid": {content: "b", mode: fs.ModeSetgid | 0o755},
+				"/test/both":   {content: "c", mode: fs.ModeSetgid | fs.ModeSticky | 0o755},
+			},
+			args:       []string{"/test", "-type", "f", "-perm", "-3000"},
+			wantStdout: "/test/both\n",
 		},
 		{
 			name: "all bits",
@@ -985,6 +1087,12 @@ func TestFind_Actions(t *testing.T) {
 			files:      map[string]entry{"/dir/a.txt": file(""), "/dir/b.txt": file("")},
 			args:       []string{"/dir", "-type", "f", "-print", "-exec", "echo", "batch", "{}", "+"},
 			wantStdout: "/dir/a.txt\n/dir/b.txt\nbatch /dir/a.txt /dir/b.txt\n",
+		},
+		{
+			name:       "exec plus is an argument unless it follows braces",
+			files:      map[string]entry{"/dir/a.txt": file("")},
+			args:       []string{"/dir", "-type", "f", "-exec", "echo", "+", "{}", ";"},
+			wantStdout: "+ /dir/a.txt\n",
 		},
 		{
 			name:       "exec per file",
@@ -1175,6 +1283,12 @@ func TestFind_Printf(t *testing.T) {
 			files:      map[string]entry{"/dir/sub/file.txt": file("content")},
 			args:       []string{"/dir", "-type", "f", "-printf", `%P\n`},
 			wantStdout: "sub/file.txt\n",
+		},
+		{
+			name:       "path without starting point that ends in slash",
+			files:      map[string]entry{"/dir/sub/file.txt": file("content")},
+			args:       []string{"/dir/", "-printf", `[%P]\n`},
+			wantStdout: "[]\n[sub]\n[sub/file.txt]\n",
 		},
 		{
 			name:       "literal percent",
@@ -1375,7 +1489,9 @@ func TestFind_FailClosed(t *testing.T) {
 		{[]string{"/dir", "-name", "keep", ")"}, "find: unexpected `)'\n"},
 		{[]string{"/dir", "-exec", ";"}, "find: missing argument to `-exec'\n"},
 		{[]string{"/dir", "-exec", "echo", "{}"}, "find: missing argument to `-exec'\n"},
-		{[]string{"/dir", "-exec", "echo", "+"}, "find: invalid argument `+' to `-exec'\n"},
+		{[]string{"/dir", "-exec", "echo", "+"}, "find: missing argument to `-exec'\n"},
+		{[]string{"/dir", "-exec", "echo", "{}", "{}", "+"}, "find: invalid argument `+' to `-exec'\n"},
+		{[]string{"-L", "/dir", "-delete"}, "find: -L is not supported\n"},
 		{[]string{"/dir", "!", "-delete"}, "find: refusing to evaluate `-delete' under negation\n"},
 		{[]string{"/dir", "-name", "remove", "-o", "-regex", "(", "-delete"}, "find: invalid argument `(' to `-regex'\n"},
 		{[]string{"/dir", "-regex", ".*)|(?:.*", "-delete"}, "find: invalid argument `.*)|(?:.*' to `-regex'\n"},
@@ -1552,6 +1668,65 @@ func TestFind_Symlinks(t *testing.T) {
 	got = run(t, fsys, "", "/dir", "-type", "f")
 	if want := "/dir/real/a.txt\n"; got.stdout != want {
 		t.Errorf("-type f stdout = %q, want %q", got.stdout, want)
+	}
+	got = run(t, fsys, "", "/dir", "-type", "l")
+	if want := "/dir/link\n"; got.stdout != want {
+		t.Errorf("-type l stdout = %q, want %q", got.stdout, want)
+	}
+}
+
+func TestFind_FollowStart(t *testing.T) {
+	newLinked := func(t *testing.T) *testFS {
+		t.Helper()
+		fsys := newFS(t, map[string]entry{"/real/a.txt": file("a")})
+		if err := fsys.Symlink("real", "link"); err != nil {
+			t.Fatalf("Symlink: %v", err)
+		}
+		if err := fsys.Symlink("nowhere", "dangling"); err != nil {
+			t.Fatalf("Symlink: %v", err)
+		}
+		return fsys
+	}
+
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "default does not follow", args: []string{"/link"}, want: "/link\n"},
+		{name: "H follows a starting point", args: []string{"-H", "/link"}, want: "/link\n/link/a.txt\n"},
+		{name: "H reports the target type", args: []string{"-H", "/link", "-maxdepth", "0", "-type", "d"}, want: "/link\n"},
+		{name: "H keeps a dangling link", args: []string{"-H", "/dangling", "-type", "l"}, want: "/dangling\n"},
+		{name: "last option wins", args: []string{"-H", "-P", "/link"}, want: "/link\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := run(t, newLinked(t), "", tt.args...)
+			if got.stdout != tt.want || got.stderr != "" || got.code != 0 {
+				t.Errorf("stdout = %q, stderr = %q, code = %d; want %q, no stderr, code 0", got.stdout, got.stderr, got.code, tt.want)
+			}
+		})
+	}
+}
+
+func TestFileTypeLetter(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		mode fs.FileMode
+		want byte
+	}{
+		{name: "regular file", mode: 0, want: 'f'},
+		{name: "directory", mode: fs.ModeDir, want: 'd'},
+		{name: "symbolic link", mode: fs.ModeSymlink, want: 'l'},
+		{name: "fifo", mode: fs.ModeNamedPipe, want: 'p'},
+		{name: "socket", mode: fs.ModeSocket, want: 's'},
+		{name: "character device", mode: fs.ModeDevice | fs.ModeCharDevice, want: 'c'},
+		{name: "block device", mode: fs.ModeDevice, want: 'b'},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fileTypeLetter(tt.mode); got != tt.want {
+				t.Errorf("fileTypeLetter(%v) = %q, want %q", tt.mode, got, tt.want)
+			}
+		})
 	}
 }
 

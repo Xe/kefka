@@ -80,16 +80,12 @@ func formatPrintf(format string, d printfData) string {
 		case 'p':
 			value = d.path
 		case 'P':
+			// Entries are the starting point plus "/" (unless it already
+			// ends in one) plus the relative path.
 			sp := d.startingPoint
-			switch {
-			case d.path == sp:
-				value = ""
-			case strings.HasPrefix(d.path, sp+"/"):
-				value = d.path[len(sp)+1:]
-			case sp == "." && strings.HasPrefix(d.path, "./"):
-				value = d.path[2:]
-			default:
-				value = d.path
+			value = strings.TrimPrefix(d.path, sp)
+			if !strings.HasSuffix(sp, "/") {
+				value = strings.TrimPrefix(value, "/")
 			}
 		case 's':
 			value = strconv.FormatInt(d.size, 10)
